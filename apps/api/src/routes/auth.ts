@@ -84,13 +84,26 @@ async function checkLoginRateLimit(key: string) {
 
 // ── POST /api/auth/login ─────────────────────────────────────
 
+// Puente demo del colaborador (ver EmpleadoShell.jsx): cualquier login de
+// empleado con password "1234" reintenta aquí mismo con esta cuenta fija.
+// Su password ya viaja hardcoded en el bundle del front (público por
+// diseño), así que el rate limit por IP no protege un secreto — solo
+// bloqueaba de más: varios colaboradores en la misma IP agotaban el cupo
+// compartido y se veían bloqueados entre sí con un error de "credenciales
+// incorrectas" que no tenía nada que ver con su intento.
+const DEMO_BRIDGE_SLUG  = 'gfp'
+const DEMO_BRIDGE_EMAIL = 'admin@gfp.mx'
+
 router.post('/login', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { slug, email, password } = loginSchema.parse(req.body)
     const normalizedEmail = email.trim().toLowerCase()
 
+    const isDemoBridge = slug === DEMO_BRIDGE_SLUG && normalizedEmail === DEMO_BRIDGE_EMAIL
     const rlKey = `login:rl:${req.ip}:${slug}:${normalizedEmail}`
-    await checkLoginRateLimit(rlKey)
+    if (!isDemoBridge) {
+      await checkLoginRateLimit(rlKey)
+    }
 
     const tenant = await prismaPublic.tenant.findUnique({ where: { slug } })
     if (!tenant || tenant.status !== 'ACTIVE') {
