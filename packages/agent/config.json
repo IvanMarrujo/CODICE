@@ -1,0 +1,21 @@
+{
+  "apiUrl": "http://localhost:3001",
+  "tenantId": "c1b551583c6739206",
+  "webhookSecret": "codice_webhook_secret_dev",
+  "agentVersion": "0.1.0",
+  "sources": [
+    {
+      "type": "EXCEL",
+      "watchPath": "./watch/nomina.xlsx",
+      "enabled": true
+    },
+    {
+      "type": "DBF",
+      "watchPath": "./watch/",
+      "files": ["EMPLEA.DBF", "NOMINA.DBF"],
+      "enabled": false
+    }
+  ],
+  "debounceMs": 3000,
+  "heartbeatIntervalSeconds": 60
+}

@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target":           "ES2022",
+    "module":           "CommonJS",
+    "moduleResolution": "node",
+    "lib":              ["ES2022"],
+    "strict":           true,
+    "esModuleInterop":  true,
+    "skipLibCheck":     true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration":      true,
+    "declarationMap":   true,
+    "sourceMap":        true,
+    "outDir":           "./dist",
+    "baseUrl":          ".",
+    "paths": {
+      "@codice/database": ["./packages/database/src/index.ts"],
+      "@codice/shared":   ["./packages/shared/src/index.ts"]
+    }
+  },
+  "exclude": ["node_modules", "dist", ".next"]
+}

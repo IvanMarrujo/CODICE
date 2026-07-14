@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.next/
+.turbo/
+.env
+.env.local
+.env.production
+*.log
+coverage/
+.nyc_output/
+uploads/tmp/
+apps/web/
+codice-scaffold/
+codice-scaffold.zip

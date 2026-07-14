@@ -1,0 +1,550 @@
+
+<h2 class="sr-only">CÓDICE — Cuadrante de decisión estratégico, reglas de negocio y calculadora de ticket</h2>
+
+<style>
+:root { --r: 10px; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-sans); }
+
+.shell { padding: 0 0 40px; }
+
+/* tabs */
+.tabs { display: flex; gap: 0; border-bottom: 0.5px solid var(--border); margin-bottom: 24px; overflow-x: auto; }
+.tab { padding: 10px 18px; font-size: 13px; cursor: pointer; border-bottom: 2px solid transparent; color: var(--text-secondary); white-space: nowrap; transition: .15s; }
+.tab.on { border-bottom-color: var(--text-accent); color: var(--text-accent); font-weight: 500; }
+.tab:hover:not(.on) { color: var(--text-primary); }
+
+.page { display: none; }
+.page.on { display: block; }
+
+/* section headers */
+.sh { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--text-muted); font-weight: 500; margin: 0 0 12px; }
+
+/* cards */
+.card { background: var(--surface-1); border: 0.5px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+.card + .card { margin-top: 12px; }
+
+.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px,1fr)); gap: 10px; margin-bottom: 20px; }
+.kpi { background: var(--surface-1); border-radius: var(--r); padding: 14px 16px; }
+.kpi-label { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+.kpi-val { font-size: 22px; font-weight: 500; }
+
+/* quadrant */
+.quad-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+.quad { border-radius: 12px; padding: 16px; border: 0.5px solid var(--border); cursor: pointer; transition: .17s; position: relative; }
+.quad:hover { border-color: var(--border-strong); }
+.quad.active { border-width: 1.5px; }
+.quad-tag { font-size: 10px; font-weight: 500; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 8px; }
+.quad-title { font-size: 14px; font-weight: 500; margin-bottom: 6px; }
+.quad-body { font-size: 12px; color: var(--text-secondary); line-height: 1.55; }
+.quad-action { margin-top: 10px; font-size: 11px; font-weight: 500; }
+
+/* Q1 Atacar */
+.q1 { background: var(--bg-success); border-color: var(--border-success); }
+.q1 .quad-tag { color: var(--text-success); }
+.q1 .quad-action { color: var(--text-success); }
+/* Q2 Desarrollar */
+.q2 { background: var(--bg-accent); border-color: var(--border-accent); }
+.q2 .quad-tag { color: var(--text-accent); }
+.q2 .quad-action { color: var(--text-accent); }
+/* Q3 Calificar */
+.q3 { background: var(--bg-warning); border-color: var(--border-warning); }
+.q3 .quad-tag { color: var(--text-warning); }
+.q3 .quad-action { color: var(--text-warning); }
+/* Q4 No tocar */
+.q4 { background: var(--bg-danger); border-color: var(--border-danger); }
+.q4 .quad-tag { color: var(--text-danger); }
+.q4 .quad-action { color: var(--text-danger); }
+
+.quad-detail { background: var(--surface-1); border: 0.5px solid var(--border); border-radius: 12px; padding: 16px 18px; margin-bottom: 20px; animation: fi .2s; }
+@keyframes fi { from { opacity:0; transform: translateY(4px); } to { opacity:1; transform:none; } }
+
+/* rules */
+.rule { border-left: 2px solid var(--border-accent); padding: 10px 14px; margin-bottom: 10px; border-radius: 0 var(--r) var(--r) 0; background: var(--surface-1); }
+.rule-num { font-size: 10px; color: var(--text-accent); font-weight: 500; letter-spacing: .08em; margin-bottom: 4px; }
+.rule-title { font-size: 13px; font-weight: 500; margin-bottom: 4px; }
+.rule-body { font-size: 12px; color: var(--text-secondary); line-height: 1.55; }
+.rule-kill { border-left-color: var(--border-danger); }
+.rule-kill .rule-num { color: var(--text-danger); }
+.rule-go { border-left-color: var(--border-success); }
+.rule-go .rule-num { color: var(--text-success); }
+
+/* ticket calc */
+.calc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+@media(max-width:500px){ .calc-grid { grid-template-columns:1fr; } }
+.field { margin-bottom: 12px; }
+.field label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 5px; }
+select, input[type=range] { width: 100%; }
+select { height: 36px; }
+.ticket-out { background: var(--bg-accent); border: 1px solid var(--border-accent); border-radius: 12px; padding: 18px; text-align: center; margin-bottom: 16px; }
+.ticket-price { font-size: 36px; font-weight: 500; color: var(--text-accent); line-height: 1; }
+.ticket-range { font-size: 13px; color: var(--text-secondary); margin-top: 6px; }
+.ticket-breakdown { font-size: 12px; color: var(--text-secondary); line-height: 2; }
+.ticket-breakdown span { color: var(--text-primary); font-weight: 500; }
+
+/* objections */
+.obj { border: 0.5px solid var(--border); border-radius: 12px; overflow: hidden; margin-bottom: 10px; }
+.obj-q { padding: 13px 16px; cursor: pointer; font-size: 13px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.obj-q:hover { background: var(--surface-1); }
+.obj-a { display: none; padding: 12px 16px; background: var(--surface-1); border-top: 0.5px solid var(--border); font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
+.obj.open .obj-a { display: block; }
+.obj-chev { font-size: 16px; transition: .2s; flex-shrink: 0; }
+.obj.open .obj-chev { transform: rotate(180deg); }
+
+/* badges */
+.badge { display: inline-block; font-size: 10px; font-weight: 500; padding: 3px 8px; border-radius: 999px; letter-spacing: .04em; }
+.badge-success { background: var(--bg-success); color: var(--text-success); }
+.badge-danger { background: var(--bg-danger); color: var(--text-danger); }
+.badge-accent { background: var(--bg-accent); color: var(--text-accent); }
+.badge-warning { background: var(--bg-warning); color: var(--text-warning); }
+
+/* scoring */
+.score-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.score-label { font-size: 13px; flex: 1; }
+.score-bar-wrap { width: 120px; height: 6px; background: var(--border); border-radius: 3px; flex-shrink: 0; }
+.score-bar { height: 100%; border-radius: 3px; }
+.score-num { font-size: 12px; color: var(--text-secondary); min-width: 28px; text-align: right; }
+
+.divider { border: none; border-top: 0.5px solid var(--border); margin: 20px 0; }
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media(max-width:480px){ .two-col { grid-template-columns:1fr; } }
+.tag-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; padding: 4px 9px; border-radius: 999px; border: 0.5px solid var(--border); color: var(--text-secondary); margin: 2px; }
+</style>
+
+<div class="shell">
+
+<!-- TABS -->
+<div class="tabs">
+  <div class="tab on" onclick="gotoTab('q')">Cuadrante</div>
+  <div class="tab" onclick="gotoTab('r')">Reglas de lógica</div>
+  <div class="tab" onclick="gotoTab('t')">Calculadora de ticket</div>
+  <div class="tab" onclick="gotoTab('o')">Manejo de objeciones</div>
+  <div class="tab" onclick="gotoTab('s')">Scorecard</div>
+</div>
+
+<!-- ═══════════════════════ CUADRANTE ═══════════════════════ -->
+<div class="page on" id="page-q">
+  <p class="sh">Cuadrante de decisión — eje X: urgencia regulatoria · eje Y: capacidad de pago</p>
+
+  <div class="quad-grid">
+    <div class="quad q1 active" onclick="showQ(1)" id="quad1">
+      <div class="quad-tag">Q1 · Atacar ahora</div>
+      <div class="quad-title">Alta urgencia + presupuesto</div>
+      <div class="quad-body">Empresa ≥80 empleados, auditoría reciente o en curso, Director RH con mandato claro.</div>
+      <div class="quad-action">→ Propuesta en ≤72h. Demo personalizada.</div>
+    </div>
+    <div class="quad q2" onclick="showQ(2)" id="quad2">
+      <div class="quad-tag">Q2 · Desarrollar</div>
+      <div class="quad-title">Presupuesto sin urgencia</div>
+      <div class="quad-body">Empresa sólida pero sin presión regulatoria inmediata. Conciencia del dolor, no del riesgo.</div>
+      <div class="quad-action">→ Educar primero. Ciclo 60–90 días.</div>
+    </div>
+    <div class="quad q3" onclick="showQ(3)" id="quad3">
+      <div class="quad-tag">Q3 · Calificar</div>
+      <div class="quad-title">Urgencia sin presupuesto claro</div>
+      <div class="quad-body">Sienten el dolor pero el proceso de compra es opaco o hay otro tomador de decisión.</div>
+      <div class="quad-action">→ Mapear stakeholders. No cotizar todavía.</div>
+    </div>
+    <div class="quad q4" onclick="showQ(4)" id="quad4">
+      <div class="quad-tag">Q4 · No tocar</div>
+      <div class="quad-title">Sin urgencia, sin presupuesto</div>
+      <div class="quad-body">≤25 empleados, comprador de producto gratuito, o resistencia activa a la tecnología.</div>
+      <div class="quad-action">→ Salir en ≤2 interacciones.</div>
+    </div>
+  </div>
+
+  <div class="quad-detail" id="quad-detail">
+    <div id="quad-detail-content"></div>
+  </div>
+
+  <p class="sh">Señales de entrada por cuadrante</p>
+  <div class="card">
+    <table style="width:100%;font-size:12px;border-collapse:collapse">
+      <thead>
+        <tr style="border-bottom:0.5px solid var(--border)">
+          <th style="text-align:left;padding:8px 10px;color:var(--text-muted);font-weight:500">Señal</th>
+          <th style="text-align:center;padding:8px 6px;font-weight:500">Q1</th>
+          <th style="text-align:center;padding:8px 6px;font-weight:500">Q2</th>
+          <th style="text-align:center;padding:8px 6px;font-weight:500">Q3</th>
+          <th style="text-align:center;padding:8px 6px;font-weight:500">Q4</th>
+        </tr>
+      </thead>
+      <tbody id="signals-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════ REGLAS ═══════════════════════ -->
+<div class="page" id="page-r">
+  <p class="sh">Reglas de apertura — calificación</p>
+  <div id="rules-open"></div>
+  <hr class="divider">
+  <p class="sh">Reglas de avance — propuesta y negociación</p>
+  <div id="rules-advance"></div>
+  <hr class="divider">
+  <p class="sh">Reglas de cierre — deal o no deal</p>
+  <div id="rules-close"></div>
+  <hr class="divider">
+  <p class="sh">Kill criteria — salir sin dudar</p>
+  <div id="rules-kill"></div>
+</div>
+
+<!-- ═══════════════════════ TICKET CALC ═══════════════════════ -->
+<div class="page" id="page-t">
+  <p class="sh">Calculadora de ticket — fee fijo por tenant + implementación</p>
+
+  <div class="calc-grid">
+    <div>
+      <div class="field">
+        <label>Industria / vertical</label>
+        <select id="c-industry" onchange="calcTicket()">
+          <option value="food">Manufactura / alimentos (GFP-type)</option>
+          <option value="legal">Despacho jurídico</option>
+          <option value="lab">Laboratorio clínico</option>
+          <option value="multi">Multi-industria / corporativo</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Número de colaboradores: <strong id="c-emp-label">150</strong></label>
+        <input type="range" id="c-emp" min="30" max="500" value="150" step="10" oninput="calcTicket()">
+      </div>
+      <div class="field">
+        <label>Módulos activos: <strong id="c-mods-label">6</strong></label>
+        <input type="range" id="c-mods" min="3" max="10" value="6" oninput="calcTicket()">
+      </div>
+    </div>
+    <div>
+      <div class="field">
+        <label>Plantas / sucursales: <strong id="c-sites-label">2</strong></label>
+        <input type="range" id="c-sites" min="1" max="8" value="2" oninput="calcTicket()">
+      </div>
+      <div class="field">
+        <label>Nivel de implementación</label>
+        <select id="c-impl" onchange="calcTicket()">
+          <option value="base">Base — 1 semana remota</option>
+          <option value="std" selected>Estándar — 2 semanas presencial</option>
+          <option value="full">Full — 4 semanas onsite + training</option>
+          <option value="enterprise">Enterprise — integración ERP / nómina</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>SLA / soporte incluido</label>
+        <select id="c-sla" onchange="calcTicket()">
+          <option value="basic">Básico (email, 48h)</option>
+          <option value="pro" selected>Pro (WhatsApp, 8h)</option>
+          <option value="premium">Premium (línea directa, 2h)</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="ticket-out">
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">FEE TOTAL · YEAR 1</div>
+    <div class="ticket-price" id="t-total">$0</div>
+    <div class="ticket-range" id="t-range">Implementación + licencia anual</div>
+  </div>
+
+  <div class="card">
+    <p class="sh" style="margin-bottom:10px">Desglose</p>
+    <div class="ticket-breakdown" id="t-breakdown"></div>
+  </div>
+
+  <hr class="divider">
+  <p class="sh">Referencia de mercado</p>
+  <div class="card" style="font-size:12px;color:var(--text-secondary);line-height:1.7">
+    Runa (100 empl.): ~$62,000–90,000 MXN/año + implementación no incluida.<br>
+    Worky (100 empl.): ~$55,000–80,000 MXN/año, sin módulo LFT nativo.<br>
+    Factorial MX: ~$45,000–70,000 MXN/año, sin verticales, sin impl. garantizada.<br>
+    <strong style="color:var(--text-primary)">CÓDICE (100 empl., estándar): 60–70% menos en TCO año 1 con implementación incluida.</strong>
+  </div>
+</div>
+
+<!-- ═══════════════════════ OBJECIONES ═══════════════════════ -->
+<div class="page" id="page-o">
+  <p class="sh">Objeciones frecuentes del Director RH — respuestas de cierre</p>
+  <div id="objections-list"></div>
+</div>
+
+<!-- ═══════════════════════ SCORECARD ═══════════════════════ -->
+<div class="page" id="page-s">
+  <p class="sh">Scorecard de calificación — completa en la primera llamada</p>
+
+  <div class="card" style="margin-bottom:16px">
+    <p style="font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:14px">Mueve los sliders según lo que observes en la conversación. El score determina el cuadrante de decisión.</p>
+    <div id="score-inputs"></div>
+    <hr class="divider" style="margin:14px 0">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+      <div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Score total</div>
+        <div style="font-size:32px;font-weight:500" id="score-total">0 / 100</div>
+      </div>
+      <div id="score-verdict" style="font-size:14px;font-weight:500;padding:10px 16px;border-radius:10px"></div>
+    </div>
+  </div>
+
+  <p class="sh">Pesos por criterio</p>
+  <div id="score-bars"></div>
+</div>
+
+</div>
+
+<script>
+const MXN = v => '$' + Math.round(v).toLocaleString('es-MX');
+
+/* ── TAB ROUTER ── */
+function gotoTab(id) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('on'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
+  document.getElementById('page-'+id).classList.add('on');
+  event.currentTarget.classList.add('on');
+}
+
+/* ── QUADRANT DATA ── */
+const QUADS = {
+  1: {
+    color: 'var(--text-success)',
+    badge: 'badge-success',
+    label: 'Q1 · Atacar ahora',
+    when: 'Empresa ≥80 empleados + presupuesto autorizado + urgencia regulatoria (auditoría, multa, IMSS, reforma jornada 40h) + Director RH como tomador de decisión.',
+    moves: ['Demo personalizada con datos del sector en ≤48h.','Propuesta económica en ≤72h, sin rangos — precio fijo.','Incluir caso de uso LFT específico del prospecto en la propuesta.','Ofrecer kickoff en 2 semanas o menos como palanca de cierre.'],
+    avoid: ['Enviar propuesta genérica sin personalización vertical.','Dar precio "por asiento" — confunde el modelo.','Dejar pasar más de 5 días sin seguimiento.'],
+  },
+  2: {
+    color: 'var(--text-accent)',
+    badge: 'badge-accent',
+    label: 'Q2 · Desarrollar',
+    when: 'Empresa con presupuesto de tecnología pero sin urgencia activa. Sienten el dolor de los Excel pero no hay presión regulatoria ni auditoría inminente.',
+    moves: ['Contenido educativo: "¿Cuánto le cuesta un finiquito mal calculado?" (LFT).','Invitar a webinar/demo grupal sin compromiso.','Validar timing: ¿cuándo renuevan licencias actuales? ¿Qué está en el presupuesto del Q3/Q4?','Ciclo natural: 60–90 días.'],
+    avoid: ['Forzar propuesta antes de que el prospecto entienda el riesgo.','Competir en precio antes de establecer valor.'],
+  },
+  3: {
+    color: 'var(--text-warning)',
+    badge: 'badge-warning',
+    label: 'Q3 · Calificar primero',
+    when: 'Hay urgencia (audit, jornada, IMSS) pero el proceso de compra es opaco, el interlocutor no tiene firma, o el presupuesto no está claro.',
+    moves: ['Mapear el comité de compra: "¿Quién más está involucrado en esta decisión?"','Pedir reunión con el CFO o Director General si el interlocutor no tiene firma.','NO cotizar hasta confirmar presupuesto. Dar un rango muy amplio si presionan.','Diagnóstico gratis como entrada: "Revisamos 3 contratos LFT sin costo."'],
+    avoid: ['Invertir más de 2h de trabajo sin confirmar quién firma.','Negociar precio con alguien sin poder de decisión.'],
+  },
+  4: {
+    color: 'var(--text-danger)',
+    badge: 'badge-danger',
+    label: 'Q4 · Salir rápido',
+    when: '≤25 empleados, proceso 100% manual sin voluntad de cambio, no hay presupuesto tecnológico, o el interlocutor quiere "solo el módulo gratuito".',
+    moves: ['Máximo 2 interacciones totales.','Ofrecer referencia a solución básica (Clockify, Sheets) y cerrar educadamente.','Documentar el lead como "no calificado" en CRM con fecha de revisión en 12 meses.'],
+    avoid: ['Descuentos profundos para forzar el fit. Destruye posicionamiento.','Gastar tiempo de implementación en cuentas que no tienen capacidad de pago.'],
+  }
+};
+
+const SIGNALS = [
+  ['Empresa ≥80 empleados','✓','✓','?','✗'],
+  ['Director RH como interlocutor','✓','✓','?','✗'],
+  ['Presupuesto TI activo','✓','✓','✗','✗'],
+  ['Auditoría o multa reciente','✓','✗','✓','✗'],
+  ['Reforma jornada 40h mencionada','✓','✗','✓','✗'],
+  ['Usa Excel para RH','✓','✓','✓','✗'],
+  ['Múltiples plantas','✓','✓','?','✗'],
+  ['Proceso de compra claro','✓','?','✗','✗'],
+  ['Quiere "solo ver"','✗','?','?','✓'],
+  ['≤25 empleados','✗','✗','?','✓'],
+];
+
+function renderSignals() {
+  const tbody = document.getElementById('signals-tbody');
+  const colors = ['var(--text-success)','var(--text-accent)','var(--text-warning)','var(--text-danger)'];
+  SIGNALS.forEach(([label,...vals]) => {
+    const tr = document.createElement('tr');
+    tr.style.borderBottom = '0.5px solid var(--border)';
+    tr.innerHTML = `<td style="padding:7px 10px;font-size:12px;color:var(--text-secondary)">${label}</td>` +
+      vals.map((v,i) => `<td style="text-align:center;padding:7px 6px;font-size:13px;color:${colors[i]}">${v}</td>`).join('');
+    tbody.appendChild(tr);
+  });
+}
+
+let activeQ = 1;
+function showQ(n) {
+  activeQ = n;
+  [1,2,3,4].forEach(i => document.getElementById('quad'+i).classList.remove('active'));
+  document.getElementById('quad'+n).classList.add('active');
+  const q = QUADS[n];
+  document.getElementById('quad-detail-content').innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <span class="badge ${q.badge}" style="font-size:11px;padding:4px 10px">${q.label}</span>
+    </div>
+    <p style="font-size:13px;color:var(--text-secondary);margin-bottom:14px;line-height:1.6"><strong style="color:var(--text-primary)">Cuándo aplica:</strong> ${q.when}</p>
+    <div class="two-col">
+      <div>
+        <div class="sh" style="margin-bottom:8px">Movimientos</div>
+        ${q.moves.map(m=>`<div style="font-size:12px;color:var(--text-secondary);padding:5px 0;border-bottom:0.5px solid var(--border);line-height:1.5">→ ${m}</div>`).join('')}
+      </div>
+      <div>
+        <div class="sh" style="margin-bottom:8px">Evitar</div>
+        ${q.avoid.map(a=>`<div style="font-size:12px;color:var(--text-danger);padding:5px 0;border-bottom:0.5px solid var(--border);line-height:1.5">✗ ${a}</div>`).join('')}
+      </div>
+    </div>
+  `;
+}
+
+/* ── RULES ── */
+const RULES = {
+  open: [
+    { n:'R-01', title:'Calificar BANT antes de hablar de precio', body:'Presupuesto, Autoridad, Necesidad, Timing. Si faltan dos o más, no se avanza.' },
+    { n:'R-02', title:'El interlocutor debe poder firmar o presentar a quien firma', body:'Una venta a un coordinador sin poder de firma es una venta que no existe. Validar en la primera llamada: "¿Quién más está involucrado en esta decisión?"' },
+    { n:'R-03', title:'Verticales primero, precio después', body:'El primer mensaje habla del dolor específico del sector (alimentos → inocuidad + LFT, despacho → actas + contratos). Nunca abrir con características genéricas.' },
+    { n:'R-04', title:'El diagnóstico es el primer producto', body:'Ofrecer revisión de 3 contratos LFT o auditoría de procesos RH sin costo. Construye autoridad antes de vender.' },
+  ],
+  advance: [
+    { n:'R-05', title:'Propuesta siempre personalizada, nunca genérica', body:'Una propuesta genérica es una señal de que no escuchaste. Incluir datos del prospecto: tamaño, vertical, plantas, riesgo LFT específico.' },
+    { n:'R-06', title:'Precio fijo, no por asiento', body:'El modelo de fee fijo elimina la ansiedad de "escalar pagando más". Presentar como inversión total año 1, no como costo mensual.' },
+    { n:'R-07', title:'Comparar siempre con el costo del status quo', body:'"¿Cuánto cuesta un finiquito mal calculado? ¿Cuánto vale el tiempo de RH en Excel?" El competidor real no es Runa — es el Excel actual.' },
+    { n:'R-08', title:'Implementación como diferenciador, no como servicio adicional', body:'En la propuesta: "Incluimos 2 semanas de implementación presencial con experto certificado." No es un costo extra — es parte del valor.' },
+    { n:'R-09', title:'Demos en el sistema real, con datos del sector', body:'No hacer demos en sandbox genérico. Preparar demo con datos de la industria del prospecto (ej: 150 operadores de empaque con sus nóminas y turnos).' },
+  ],
+  close: [
+    { n:'R-10', title:'Fechas como herramienta de cierre', body:'"Podemos tener su sistema activo en 2 semanas si firmamos esta semana." La implementación rápida es la palanca — úsala.' },
+    { n:'R-11', title:'Un solo precio — no rangos', body:'Los rangos invitan a negociar. Dar precio fijo con desglose claro. El descuento, si aplica, se mueve en el fee de implementación, no en la licencia.' },
+    { n:'R-12', title:'El silencio después de la propuesta no es un no', body:'Seguimiento en 48h si no hay respuesta. Preguntar por bloqueos específicos: "¿Hay algo en la propuesta que necesite ajustar?" No perseguir después de 3 intentos sin respuesta.' },
+    { n:'R-13', title:'Contrato mínimo: 12 meses', body:'Menos de 12 meses no es viable para implementación y adopción real. Ofrecer 24 meses con precio congelado como incentivo.' },
+  ],
+  kill: [
+    { n:'K-01', title:'El prospecto quiere negociar antes de ver el producto', body:'Si el primer mensaje es "¿cuánto cuesta?" sin contexto, calificar antes de responder. Si insiste sin dar información, salir.' },
+    { n:'K-02', title:'Tres interacciones sin avance claro', body:'Si después de 3 touchpoints no hay reunión agendada con tomador de decisión, el lead no está listo. Pasar a nurture y mover tiempo a otro lead.' },
+    { n:'K-03', title:'Pide descuento del 50% o más', body:'No es el mercado correcto o hay un problema de posicionamiento. No negociar a ese nivel — destruye el modelo.' },
+    { n:'K-04', title:'Compara precio con Excel o "nuestra plataforma interna"', body:'Si la referencia de precio es cero, el dolor no es suficiente todavía. Salir educadamente y dejar contenido educativo.' },
+  ]
+};
+
+function renderRules() {
+  const render = (arr, type) => arr.map(r => `
+    <div class="rule ${type==='kill'?'rule-kill':type==='go'?'rule-go':''}">
+      <div class="rule-num">${r.n}</div>
+      <div class="rule-title">${r.title}</div>
+      <div class="rule-body">${r.body}</div>
+    </div>`).join('');
+  document.getElementById('rules-open').innerHTML = render(RULES.open,'');
+  document.getElementById('rules-advance').innerHTML = render(RULES.advance,'');
+  document.getElementById('rules-close').innerHTML = render(RULES.close,'go');
+  document.getElementById('rules-kill').innerHTML = render(RULES.kill,'kill');
+}
+
+/* ── TICKET CALC ── */
+const IMPL_FEE = { base:18000, std:32000, full:55000, enterprise:90000 };
+const SLA_FEE = { basic:0, pro:8400, premium:18000 };
+const VERT_MULT = { food:1.0, legal:1.05, lab:1.08, multi:1.12 };
+const VERT_NAMES = { food:'Manufactura / alimentos', legal:'Despacho jurídico', lab:'Laboratorio clínico', multi:'Multi-industria' };
+
+function calcTicket() {
+  const emp = +document.getElementById('c-emp').value;
+  const mods = +document.getElementById('c-mods').value;
+  const sites = +document.getElementById('c-sites').value;
+  const impl = document.getElementById('c-impl').value;
+  const sla = document.getElementById('c-sla').value;
+  const vert = document.getElementById('c-industry').value;
+
+  document.getElementById('c-emp-label').textContent = emp;
+  document.getElementById('c-mods-label').textContent = mods;
+  document.getElementById('c-sites-label').textContent = sites;
+
+  const baseSeat = emp <= 60 ? 1100 : emp <= 120 ? 950 : emp <= 250 ? 820 : 720;
+  const licencia = Math.round(baseSeat * emp * VERT_MULT[vert]);
+  const modExtra = Math.max(0, mods - 5) * 6000;
+  const siteExtra = Math.max(0, sites - 1) * 4500;
+  const implFee = IMPL_FEE[impl];
+  const slaFee = SLA_FEE[sla];
+  const total = licencia + modExtra + siteExtra + implFee + slaFee;
+
+  document.getElementById('t-total').textContent = MXN(total);
+  document.getElementById('t-range').textContent = `${VERT_NAMES[vert]} · ${emp} colaboradores · ${mods} módulos · ${sites} planta(s)`;
+  document.getElementById('t-breakdown').innerHTML = `
+    Licencia anual (${MXN(Math.round(baseSeat * VERT_MULT[vert]))}/emp): <span>${MXN(licencia)}</span><br>
+    Módulos adicionales (${Math.max(0,mods-5)} extra): <span>${MXN(modExtra)}</span><br>
+    Plantas adicionales (${Math.max(0,sites-1)} extra): <span>${MXN(siteExtra)}</span><br>
+    Implementación (${impl}): <span>${MXN(implFee)}</span><br>
+    SLA / soporte anual: <span>${MXN(slaFee)}</span><br>
+    <strong style="color:var(--text-primary);font-size:14px">Total año 1: <span>${MXN(total)}</span></strong>
+  `;
+}
+
+/* ── OBJECTIONS ── */
+const OBJS = [
+  { q:'"Ya tenemos Runa / Worky / Factorial"', a:'Perfecto — ¿cómo manejan el cálculo de finiquito con la reforma de jornada de 2026? ¿El sistema genera la constancia de capacitación automáticamente? Esos sistemas son horizontales; CÓDICE es vertical para su sector y está construido sobre la LFT actual, no sobre la de hace 5 años.' },
+  { q:'"Es muy caro"', a:'¿Caro comparado con qué? Si la referencia es el Excel actual: un solo finiquito mal calculado cuesta entre $30,000 y $180,000 MXN en JFCA. Si la referencia es otra plataforma: nuestro fee incluye implementación y soporte — el TCO año 1 es 60-70% menor cuando lo comparan manzanas con manzanas.' },
+  { q:'"Necesito pensarlo / consultarlo"', a:'Completamente válido. ¿Con quién lo consulta y cuándo podemos agendar esa conversación con ellos presentes? Si hay algo en la propuesta que necesite ajustar para facilitar esa decisión, dígame ahora.' },
+  { q:'"¿No tienen un plan más básico / gratuito?"', a:'No. El modelo de CÓDICE funciona porque la implementación está incluida — un sistema sin implementación es un Excel más complicado. Lo que sí puedo hacer es ajustar el alcance de módulos para un fee de entrada menor.' },
+  { q:'"Nuestra IT necesita revisarlo"', a:'Perfecto — organicemos una llamada técnica de 30 minutos con su equipo. Tengo especificaciones de arquitectura, política de datos y contrato de SLA para que los evalúen. ¿Esta semana o la siguiente?' },
+  { q:'"Nos preocupa la privacidad de los datos"', a:'Cada tenant tiene instancia, base de datos y llaves de cifrado completamente aisladas — no hay infraestructura compartida entre clientes. Los datos nunca salen de su entorno. Le paso nuestra política de datos y el DPA firmado.' },
+  { q:'"¿Cuánto tiempo tarda la implementación?"', a:'Con el plan estándar: 2 semanas. La primera semana es configuración y migración de datos. La segunda es capacitación con su equipo RH. Al final de la semana 2, su equipo opera solo.' },
+  { q:'"¿Qué pasa si la LFT cambia?"', a:'Ese es exactamente el punto. Las calculadoras y los contratos de CÓDICE se actualizan con cada reforma. Usted no tiene que tocar nada — el sistema refleja la LFT en vigor, incluyendo la transición de 48 a 40 horas 2026–2030.' },
+];
+
+function renderObjList() {
+  document.getElementById('objections-list').innerHTML = OBJS.map((o,i)=>`
+    <div class="obj" id="obj${i}">
+      <div class="obj-q" onclick="toggleObj(${i})">
+        <span style="font-size:13px;font-weight:500">${o.q}</span>
+        <span class="obj-chev">⌄</span>
+      </div>
+      <div class="obj-a">${o.a}</div>
+    </div>`).join('');
+}
+function toggleObj(i) {
+  document.getElementById('obj'+i).classList.toggle('open');
+}
+
+/* ── SCORECARD ── */
+const CRITERIA = [
+  { id:'emp', label:'Tamaño empresa', max:20, hint:'<40: 0 · 40-79: 8 · 80-149: 14 · 150+: 20' },
+  { id:'dec', label:'Poder de decisión del interlocutor', max:20, hint:'Coordinador:0 · Mgr:8 · Dir RH:16 · Dir+Firma:20' },
+  { id:'pain', label:'Intensidad del dolor (LFT / auditoría)', max:20, hint:'Sin urgencia:0 · Malestar:8 · Auditoría próx:16 · Multa activa:20' },
+  { id:'bud', label:'Presupuesto confirmado', max:20, hint:'No claro:0 · Probable:8 · Confirmado:16 · Aprobado:20' },
+  { id:'time', label:'Timing de decisión', max:20, hint:'>6 meses:0 · 3-6m:8 · 1-3m:16 · <1m:20' },
+];
+
+function renderScorecard() {
+  document.getElementById('score-inputs').innerHTML = CRITERIA.map(c=>`
+    <div style="margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <label style="font-size:13px">${c.label}</label>
+        <span style="font-size:12px;color:var(--text-accent);font-weight:500" id="sv-${c.id}">0 / ${c.max}</span>
+      </div>
+      <input type="range" min="0" max="${c.max}" step="2" value="0" id="si-${c.id}" oninput="scoreChanged()">
+      <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${c.hint}</div>
+    </div>`).join('');
+
+  document.getElementById('score-bars').innerHTML = CRITERIA.map(c=>`
+    <div class="score-row">
+      <div class="score-label">${c.label}</div>
+      <div class="score-bar-wrap"><div class="score-bar" id="sb-${c.id}" style="width:0%;background:var(--fill-accent)"></div></div>
+      <div class="score-num" id="sn-${c.id}">0</div>
+    </div>`).join('');
+}
+
+function scoreChanged() {
+  let total = 0;
+  CRITERIA.forEach(c => {
+    const v = +document.getElementById('si-'+c.id).value;
+    total += v;
+    document.getElementById('sv-'+c.id).textContent = `${v} / ${c.max}`;
+    document.getElementById('sb-'+c.id).style.width = (v/c.max*100)+'%';
+    document.getElementById('sn-'+c.id).textContent = v;
+  });
+  document.getElementById('score-total').textContent = `${total} / 100`;
+  const el = document.getElementById('score-verdict');
+  if (total >= 75) {
+    el.textContent = '→ Q1 · Atacar ahora'; el.style.background = 'var(--bg-success)'; el.style.color = 'var(--text-success)';
+  } else if (total >= 55) {
+    el.textContent = '→ Q2 · Desarrollar'; el.style.background = 'var(--bg-accent)'; el.style.color = 'var(--text-accent)';
+  } else if (total >= 35) {
+    el.textContent = '→ Q3 · Calificar primero'; el.style.background = 'var(--bg-warning)'; el.style.color = 'var(--text-warning)';
+  } else {
+    el.textContent = '→ Q4 · No tocar'; el.style.background = 'var(--bg-danger)'; el.style.color = 'var(--text-danger)';
+  }
+}
+
+/* ── INIT ── */
+renderSignals();
+renderRules();
+renderObjList();
+renderScorecard();
+calcTicket();
+showQ(1);
+</script>

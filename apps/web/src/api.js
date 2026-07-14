@@ -1,0 +1,299 @@
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001";
+
+export async function login({ slug, email, password }) {
+  const res = await fetch(`${API_BASE}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug, email, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Login falló (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function fetchEmployees(token) {
+  const res = await fetch(`${API_BASE}/api/employees?pageSize=100`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Error al cargar empleados (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function fetchAttendance(token, date) {
+  const res = await fetch(`${API_BASE}/api/attendance?date=${date}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Error al cargar asistencia (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function checkinAttendance(token, employeeId) {
+  const res = await fetch(`${API_BASE}/api/attendance/checkin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ employeeId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Error al registrar entrada (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function checkoutAttendance(token, employeeId) {
+  const res = await fetch(`${API_BASE}/api/attendance/checkout`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ employeeId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Error al registrar salida (${res.status})`);
+  }
+  return res.json();
+}
+
+async function authedFetch(token, path) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `Error de API (${res.status})`);
+  return body;
+}
+
+export function fetchSyncLogLatest(token) {
+  return authedFetch(token, `/api/connectors/sync-log/latest`);
+}
+
+export function fetchPayroll(token, employeeId, pageSize = 50) {
+  return authedFetch(token, `/api/payroll?employeeId=${employeeId}&pageSize=${pageSize}`);
+}
+
+export function fetchPayrollSummary(token, period) {
+  return authedFetch(token, `/api/payroll/summary${period ? `?period=${period}` : ""}`);
+}
+
+export function fetchPayrollLatestByEmployee(token) {
+  return authedFetch(token, `/api/payroll/latest-by-employee`);
+}
+
+export function fetchPayrollExplain(token, recordId) {
+  return authedFetch(token, `/api/payroll/${recordId}/explain`);
+}
+
+export function fetchSyncLogHistory(token) {
+  return authedFetch(token, `/api/connectors/sync-log/history`);
+}
+
+async function authedFetchJSON(token, path, method, body) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method,
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const responseBody = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(responseBody.error || `Error de API (${res.status})`);
+  return responseBody;
+}
+
+// ── Live-wire connectors: archivo conectado, reload, reemplazo, auto-sync ─
+
+export function fetchConnectedSources(token) {
+  return authedFetch(token, `/api/connectors/sources`);
+}
+
+export function reloadConnectedSource(token, sourceId) {
+  return authedFetchJSON(token, `/api/connectors/${sourceId}/reload`, "POST");
+}
+
+export function setConnectedSourceAutoSync(token, sourceId, autoSync, syncIntervalMinutes) {
+  return authedFetchJSON(token, `/api/connectors/${sourceId}/auto-sync`, "PATCH", { autoSync, syncIntervalMinutes });
+}
+
+// Reemplaza el archivo de una conexión ya existente (PATCH, multipart, con
+// progreso real vía XHR — mismo patrón que uploadConnectorFile).
+export function replaceConnectedSourceFile(token, sourceId, files, onProgress) {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    Array.from(files).forEach((f) => form.append("files", f));
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("PATCH", `${API_BASE}/api/connectors/${sourceId}/update-file`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch { /* respuesta no-JSON */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body.error || `Error al reemplazar archivo (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error("Error de red al reemplazar archivo"));
+    xhr.send(form);
+  });
+}
+
+// Dry-run: parsea el archivo (headers detectados + primeras 5 filas) sin
+// escribir en DB — usado por el wizard de conectores (Modo A, steps 3-4).
+export function previewExcel(token, file) {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append("file", file);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE}/api/connectors/preview/excel`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch { /* respuesta no-JSON */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body.error || `Error al previsualizar archivo (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error("Error de red al previsualizar archivo"));
+    xhr.send(form);
+  });
+}
+
+export function previewCfdi(token, files) {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    Array.from(files).forEach((f) => form.append("files", f));
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE}/api/connectors/preview/cfdi`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch { /* respuesta no-JSON */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body.error || `Error al previsualizar archivos (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error("Error de red al previsualizar archivos"));
+    xhr.send(form);
+  });
+}
+
+// Sube archivos a un conector (multipart) con progreso real vía XHR — fetch
+// no expone eventos de progreso de subida.
+export function uploadConnectorFile(token, endpointPath, files, onProgress) {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    Array.from(files).forEach((f) => form.append("files", f));
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE}${endpointPath}`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch { /* respuesta no-JSON */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body.error || `Error al subir archivo (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error("Error de red al subir archivo"));
+    xhr.send(form);
+  });
+}
+
+// ── Agente local (webhook + heartbeat) ────────────────────────
+
+export function fetchAgentStatus(token, tenantId) {
+  return authedFetch(token, `/api/connectors/agent-status/${tenantId}`);
+}
+
+export async function downloadAgentZip(token, tenantId) {
+  const res = await fetch(`${API_BASE}/api/connectors/download-agent/${tenantId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Error al descargar el agente (${res.status})`);
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  return { blob, filename: match ? match[1] : "codice-agent.zip" };
+}
+
+// ── Control total de fuentes conectadas ───────────────────────
+
+export function pauseConnectedSource(token, sourceId) {
+  return authedFetchJSON(token, `/api/connectors/sources/${sourceId}/pause`, "PATCH");
+}
+
+export function resumeConnectedSource(token, sourceId) {
+  return authedFetchJSON(token, `/api/connectors/sources/${sourceId}/resume`, "PATCH");
+}
+
+export function deleteConnectedSource(token, sourceId) {
+  return authedFetchJSON(token, `/api/connectors/sources/${sourceId}`, "DELETE");
+}
+
+export function deleteConnectedSourceWithData(token, sourceId) {
+  return authedFetchJSON(token, `/api/connectors/sources/${sourceId}/with-data?confirm=true`, "DELETE");
+}
+
+// ── Empleados — alta/edición/baja ─────────────────────────────
+
+export function createEmployee(token, payload) {
+  return authedFetchJSON(token, `/api/employees`, "POST", payload);
+}
+
+export function updateEmployee(token, id, payload) {
+  return authedFetchJSON(token, `/api/employees/${id}`, "PATCH", payload);
+}
+
+export function deleteEmployee(token, id) {
+  return authedFetchJSON(token, `/api/employees/${id}`, "DELETE");
+}
+
+export function bulkDeleteEmployees(token) {
+  return authedFetchJSON(token, `/api/employees/bulk`, "DELETE");
+}
+
+// ── Recibos de nómina — eliminación ────────────────────────────
+
+export function deletePayrollRecord(token, id) {
+  return authedFetchJSON(token, `/api/payroll/${id}`, "DELETE");
+}
+
+export function bulkDeletePayrollRecords(token, employeeId) {
+  return authedFetchJSON(token, `/api/payroll/bulk?employeeId=${employeeId}`, "DELETE");
+}
+
+function yearsSince(dateStr) {
+  const d = new Date(dateStr);
+  const now = new Date();
+  let years = now.getFullYear() - d.getFullYear();
+  const m = now.getMonth() - d.getMonth();
+  if (m < 0 || (m === 0 && now.getDate() < d.getDate())) years--;
+  return Math.max(0, years);
+}
+
+export function mapEmployee(row) {
+  return {
+    id: row.employee_code || row.id,
+    dbId: row.id, // uuid real — requerido por /api/payroll?employeeId=
+    nombre: row.full_name,
+    depto: row.department,
+    puesto: row.position,
+    status: row.status,
+    contrato: row.contract_type,
+    planta: row.plant,
+    turno: row.shift,
+    ingreso: row.hire_date ? String(row.hire_date).slice(0, 10) : "",
+    antiguedad: row.hire_date ? yearsSince(row.hire_date) : 0,
+    salario: Number(row.monthly_salary ?? 0),
+    email: row.email,
+  };
+}

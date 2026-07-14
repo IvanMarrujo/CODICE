@@ -1,0 +1,41 @@
+{
+  "name": "codice",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CÓDICE — Sistema de gestión de personal con LFT en línea",
+  "packageManager": "npm@10.9.8",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev --filter=@codice/api --filter=@codice/web",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "db:push": "turbo run db:push --filter=@codice/database",
+    "db:studio": "turbo run db:studio --filter=@codice/database",
+    "db:migrate": "turbo run db:migrate --filter=@codice/database",
+    "docker:up": "docker compose -f docker/docker-compose.yml up -d",
+    "docker:down": "docker compose -f docker/docker-compose.yml down",
+    "scaffold:tenant": "ts-node scripts/provisionTenant.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "dotenv-cli": "^11.0.0",
+    "eslint": "^8.57.0",
+    "prettier": "^3.2.0",
+    "ts-node": "^10.9.0",
+    "turbo": "^2.0.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
+  "dependencies": {
+    "@types/pg": "^8.20.0",
+    "pg": "^8.22.0",
+    "redis": "^6.1.0"
+  }
+}

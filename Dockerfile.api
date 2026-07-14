@@ -1,0 +1,31 @@
+FROM node:20-bookworm-slim AS base
+WORKDIR /app
+
+# Prisma's query engine needs libssl present at `generate` time to pick the
+# right engine binary (bookworm ships libssl3, not the libssl1.1 it defaults
+# to when it can't detect anything) — install before running prisma generate.
+RUN apt-get update -y && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+
+# Puppeteer's bundled Chromium isn't usable in this slim image without extra
+# system libs; skip the download so npm ci stays fast. PDF export (actas/
+# contratos, src/lib/pdf.ts) will fail at runtime until this is revisited.
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+
+COPY package.json package-lock.json ./
+COPY apps/api/package.json apps/api/package.json
+COPY packages/database/package.json packages/database/package.json
+COPY packages/shared/package.json packages/shared/package.json
+
+RUN npm ci
+
+COPY tsconfig.json ./
+COPY apps/api apps/api
+COPY packages/database packages/database
+COPY packages/shared packages/shared
+
+RUN npx prisma generate --schema=packages/database/prisma/schema.prisma
+
+ENV NODE_ENV=production
+EXPOSE 3001
+
+CMD ["npx", "ts-node", "--transpile-only", "-P", "apps/api/tsconfig.json", "apps/api/src/index.ts"]

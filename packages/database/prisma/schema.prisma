@@ -1,0 +1,252 @@
+// ============================================================
+// CÓDICE · Prisma Schema
+// Schema: PUBLIC (global) — tenants, plans, billing, audit
+//
+// IMPORTANTE: Las tablas del schema de cada tenant (employees,
+// contracts, payroll, etc.) se crean dinámicamente via SQL raw
+// cuando se provisiona un nuevo tenant. Ver:
+//   scripts/provisionTenant.ts
+//   packages/database/prisma/tenant-schema.sql
+//
+// Este archivo solo define el schema PUBLIC compartido.
+// ============================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["public"]
+}
+
+// ── ENUMS ────────────────────────────────────────────────────
+
+enum Plan {
+  CONECTOR   // hasta 100 emp
+  CORE       // hasta 300 emp — el tier principal
+  ENTERPRISE // hasta 500+ emp
+
+  @@schema("public")
+}
+
+enum TenantStatus {
+  PROVISIONING  // recién creado, setup en progreso
+  ACTIVE        // operando normalmente
+  SUSPENDED     // pago vencido
+  CANCELLED     // baja definitiva
+
+  @@schema("public")
+}
+
+enum Industry {
+  MANUFACTURA_ALIMENTOS
+  DESPACHO_JURIDICO
+  LABORATORIO_CLINICO
+  MULTI_INDUSTRIA
+  RETAIL
+  LOGISTICA
+  SERVICIOS
+  OTRO
+
+  @@schema("public")
+}
+
+// ── TENANT (el cliente de CÓDICE) ────────────────────────────
+
+model Tenant {
+  id         String       @id @default(cuid())
+  slug       String       @unique   // "gfp", "marrujo-legal" — URL-safe
+  name       String                 // "Grupo Food Packing Co."
+  legalName  String?                // Razón social completa
+  rfc        String?      @unique   // RFC de la empresa
+  industry   Industry     @default(MANUFACTURA_ALIMENTOS)
+  plan       Plan         @default(CORE)
+  status     TenantStatus @default(PROVISIONING)
+
+  // Multi-tenant isolation
+  dbSchema   String       @unique   // "tenant_abc123" — PostgreSQL schema
+  redisNs    String       @unique   // "t:abc123" — Redis namespace prefix
+  r2Bucket   String?                // "codice-abc123" — Cloudflare R2 bucket
+
+  // Contact / config
+  contactEmail    String
+  contactPhone    String?
+  city            String?
+  state           String?
+  country         String  @default("MX")
+  logoUrl         String?
+  primaryColor    String  @default("#56d4f0")
+
+  // Limits by plan
+  maxEmployees    Int     @default(300)
+  maxAdminUsers   Int     @default(5)
+  maxPlants       Int     @default(2)
+
+  // Legacy connectors configured
+  hasContpaq      Boolean @default(false)
+  hasNomipaq      Boolean @default(false)
+  hasExcelSync    Boolean @default(false)
+
+  // Timestamps
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  activatedAt DateTime?
+  cancelledAt DateTime?
+
+  // Relations
+  subscriptions  Subscription[]
+  adminUsers     AdminUser[]
+  auditLog       GlobalAuditLog[]
+
+  @@index([slug])
+  @@index([status])
+  @@schema("public")
+}
+
+// ── ADMIN USERS (usuarios del panel de RH, no colaboradores) ─
+
+model AdminUser {
+  id           String   @id @default(cuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id])
+
+  email        String
+  passwordHash String
+  firstName    String
+  lastName     String
+  role         AdminRole @default(HR_MANAGER)
+
+  // 2FA (fase 2)
+  totpSecret   String?
+  totpEnabled  Boolean @default(false)
+
+  isActive     Boolean  @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@schema("public")
+}
+
+enum AdminRole {
+  SUPER_ADMIN    // Auspex — tú
+  HR_MANAGER     // Director / Gerente de RH
+  HR_ANALYST     // Analista de RH
+  AREA_MANAGER   // Jefe de área (solo su depto)
+  VIEWER         // Solo lectura
+
+  @@schema("public")
+}
+
+// ── BILLING / SUBSCRIPTIONS ───────────────────────────────────
+
+model Subscription {
+  id         String   @id @default(cuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+
+  plan       Plan
+  priceYear  Decimal  @db.Decimal(10,2)  // fee anual en MXN
+  implFee    Decimal  @db.Decimal(10,2)  // fee de implementación
+  slaFee     Decimal  @db.Decimal(10,2)  @default(0)
+
+  startDate  DateTime
+  endDate    DateTime
+  autoRenew  Boolean  @default(true)
+
+  // Payment tracking
+  status     SubStatus @default(PENDING)
+  paidAt     DateTime?
+  invoiceUrl String?
+  notes      String?
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([status])
+  @@schema("public")
+}
+
+enum SubStatus {
+  PENDING
+  ACTIVE
+  OVERDUE
+  CANCELLED
+
+  @@schema("public")
+}
+
+// ── GLOBAL AUDIT LOG ──────────────────────────────────────────
+
+model GlobalAuditLog {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id])
+
+  actor     String   // email o "system"
+  action    String   // "tenant.created", "tenant.suspended", etc.
+  resource  String?  // "tenant:abc123"
+  payload   Json?
+  ip        String?
+
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([action])
+  @@index([createdAt])
+  @@schema("public")
+}
+
+// ── CONNECTOR SYNC LOG (global, multi-tenant) ─────────────────
+
+model SyncLog {
+  id         String     @id @default(cuid())
+  tenantId   String
+  source     SyncSource // CONTPAQ | NOMIPAQ | EXCEL
+  status     SyncStatus @default(PENDING)
+  fileName   String?    // nombre del archivo origen, ej: "nomina_gfp_mock.xlsx"
+
+  totalRows  Int        @default(0)
+  processed  Int        @default(0)
+  errors     Int        @default(0)
+  errorLog   Json?      // array de errores con detalle
+
+  // Split de `processed` por tipo de entidad — no todos los conectores
+  // tocan ambas tablas (ej: Excel genérico solo toca employees).
+  employeesProcessed Int?
+  payrollProcessed   Int?
+
+  startedAt  DateTime   @default(now())
+  finishedAt DateTime?
+  durationMs Int?
+
+  @@index([tenantId])
+  @@index([status])
+  @@schema("public")
+}
+
+enum SyncSource {
+  CONTPAQ_XML
+  NOMIPAQ_DBF
+  NOMIPAQ_EXCEL
+  EXCEL_GENERIC
+  MANUAL
+
+  @@schema("public")
+}
+
+enum SyncStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  PARTIAL   // completó con algunos errores
+
+  @@schema("public")
+}
