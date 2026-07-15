@@ -516,6 +516,32 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.health_profiles (
 
 CREATE INDEX idx_health_profiles_emp ON {SCHEMA}.health_profiles (employee_id);
 
+-- ─── VACATION POLICY (política interna de vacaciones) ─────────
+-- Debe ser siempre >= mínimos LFT 2026 — se valida en el endpoint,
+-- no aquí (una fila por tenant, sin CHECK constraints por columna
+-- para no tener que migrar el schema si la tabla LFT cambia).
+
+CREATE TABLE IF NOT EXISTS {SCHEMA}.vacation_policy (
+  id                            TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  tenant_id                     TEXT        NOT NULL,
+
+  year_1_days                   INTEGER     DEFAULT 12,
+  year_2_days                   INTEGER     DEFAULT 14,
+  year_3_days                   INTEGER     DEFAULT 16,
+  year_4_days                   INTEGER     DEFAULT 18,
+  year_5_days                   INTEGER     DEFAULT 20,
+  additional_days_per_5_years   INTEGER     DEFAULT 2,
+  accrual_type                  TEXT        DEFAULT 'ANNUAL',  -- ANNUAL | MONTHLY | BIWEEKLY
+  carry_over_days               INTEGER     DEFAULT 0,
+  max_days                      INTEGER     DEFAULT 30,
+  notes                         TEXT,
+
+  created_at                    TIMESTAMPTZ DEFAULT NOW(),
+  updated_at                    TIMESTAMPTZ DEFAULT NOW(),
+
+  CONSTRAINT uq_vacation_policy UNIQUE (tenant_id)
+);
+
 -- ─── TENANT AUDIT LOG (per-tenant) ───────────────────────────
 
 CREATE TABLE IF NOT EXISTS {SCHEMA}.audit_log (
@@ -554,7 +580,7 @@ BEGIN
   FOREACH t IN ARRAY ARRAY[
     'employees','contracts','payroll_records','time_off',
     'requests','attendance_records','actas','courses','course_progress',
-    'bonuses','signage_slides','connected_sources','health_profiles'
+    'bonuses','signage_slides','connected_sources','health_profiles','vacation_policy'
   ]
   LOOP
     EXECUTE format(

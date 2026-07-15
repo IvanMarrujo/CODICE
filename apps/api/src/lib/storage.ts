@@ -13,10 +13,17 @@ function isPlaceholder(value: string | undefined): boolean {
   return !value || value.startsWith('REPLACE')
 }
 
-function r2Configured(): boolean {
-  return !isPlaceholder(process.env.R2_ACCOUNT_ID) &&
-         !isPlaceholder(process.env.R2_ACCESS_KEY_ID) &&
-         !isPlaceholder(process.env.R2_SECRET_ACCESS_KEY)
+let warnedMissingR2 = false
+
+export function r2Configured(): boolean {
+  const configured = !isPlaceholder(process.env.R2_ACCOUNT_ID) &&
+    !isPlaceholder(process.env.R2_ACCESS_KEY_ID) &&
+    !isPlaceholder(process.env.R2_SECRET_ACCESS_KEY)
+  if (!configured && !warnedMissingR2) {
+    warnedMissingR2 = true
+    console.warn('[CÓDICE] R2 not configured — using /tmp. Set R2_* env vars for production storage.')
+  }
+  return configured
 }
 
 let s3Client: S3Client | null = null

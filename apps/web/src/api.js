@@ -365,6 +365,38 @@ export function simulateWhatsAppAgent(token, message) {
   return authedFetchJSON(token, `/api/webhook/whatsapp/simulate`, "POST", { message });
 }
 
+// ── Política de vacaciones ──────────────────────────────────────
+
+export function fetchVacationPolicy(token) {
+  return authedFetch(token, `/api/settings/vacation-policy`);
+}
+
+export function updateVacationPolicy(token, payload) {
+  return authedFetchJSON(token, `/api/settings/vacation-policy`, "PATCH", payload);
+}
+
+// ── Storage status ───────────────────────────────────────────────
+
+export function fetchStorageStatus(token) {
+  return authedFetch(token, `/api/admin/storage-status`);
+}
+
+// ── NDA de piloto ────────────────────────────────────────────────
+
+export async function downloadNdaPreview(token) {
+  const res = await fetch(`${API_BASE}/api/admin/nda-preview`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Error al generar el NDA (${res.status})`);
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  return { blob, filename: match ? match[1] : "nda-codice.pdf" };
+}
+
 export function mapEmployee(row) {
   return {
     id: row.employee_code || row.id,

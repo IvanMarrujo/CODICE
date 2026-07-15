@@ -26,6 +26,7 @@ import {
   uploadHealthDocument, deleteHealthDocument, downloadHealthDocument, fetchHealthDocumentInsights,
   fetchAdminProfile, updateAdminProfile,
   fetchWhatsAppSettings, updateWhatsAppSettings, fetchWhatsAppMockLog, simulateWhatsAppAgent,
+  fetchVacationPolicy, updateVacationPolicy, fetchStorageStatus, downloadNdaPreview,
 } from "./api.js";
 
 // Credenciales de auto-login del cockpit admin (tenant único GFP). Vienen de
@@ -61,15 +62,20 @@ let _toast = () => {};
 const toast = (msg, kind = "ok") => _toast(msg, kind);
 
 const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 :root{
-  --bg:#04060a;--glass:rgba(255,255,255,0.045);--glass-2:rgba(255,255,255,0.07);
-  --glass-hi:rgba(255,255,255,0.10);--border:rgba(255,255,255,0.09);--border-hi:rgba(255,255,255,0.16);
-  --text:#eaf0f7;--muted:#8794a6;--muted-2:#5d6878;
-  --cyan:#56d4f0;--violet:#a78bfa;--emerald:#4fd6a3;--amber:#f5b544;--rose:#fb7185;
-  --font:'Space Grotesk',ui-sans-serif,system-ui,sans-serif;--mono:'JetBrains Mono',ui-monospace,monospace;
+  --bg:#020917;--glass:rgba(255,255,255,0.045);--glass-2:rgba(255,255,255,0.07);
+  --glass-hi:rgba(255,255,255,0.10);--border:rgba(255,255,255,0.07);--border-hi:rgba(255,255,255,0.16);
+  --text:#e8f0fe;--muted:#8ea0bd;--muted-2:#5d6878;
+  --cyan:#4db8ff;--violet:#a78bfa;--emerald:#00c896;--amber:#f5c518;--rose:#fb7185;
+  --font:'DM Sans',ui-sans-serif,system-ui,sans-serif;--mono:'DM Mono',ui-monospace,monospace;
+  /* Alias explícitos de la identidad CÓDICE — mismos valores que los vars de arriba */
+  --codice-ink:#020917;--codice-surface:#06142d;--codice-border:rgba(255,255,255,0.07);
+  --codice-signal:#00c896;--codice-alert:#f5c518;--codice-data:#4db8ff;
+  --codice-text:#e8f0fe;--codice-muted:rgba(232,240,254,0.45);
 }
 *{box-sizing:border-box}
+body{font-family:var(--font)}
+.mono,code,.amount{font-family:var(--mono)}
 .codice{font-family:var(--font);color:var(--text);background:var(--bg);min-height:100vh;position:relative;overflow:hidden;letter-spacing:-.01em}
 .codice ::-webkit-scrollbar{width:9px;height:9px}
 .codice ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:9px}
@@ -2554,6 +2560,42 @@ function WhatsAppPage({ token }) {
   );
 }
 
+function StorageWarningBanner({ token }) {
+  const [status, setStatus] = useState(null);
+  useEffect(() => {
+    fetchStorageStatus(token).then(setStatus).catch(() => {});
+  }, [token]);
+  if (!status || status.r2Configured) return null;
+  return (
+    <div className="warnbox" style={{ marginBottom: 18 }}>
+      <div className="row" style={{ gap: 9 }}>
+        <AlertTriangle size={15} style={{ color: "var(--amber)" }} />
+        <span style={{ fontSize: 12.5 }}>{status.warning}</span>
+      </div>
+    </div>
+  );
+}
+
+function NdaDownloadButton({ token }) {
+  const [busy, setBusy] = useState(false);
+  const descargar = async () => {
+    setBusy(true);
+    try {
+      const { blob, filename } = await downloadNdaPreview(token);
+      downloadBlobFile(filename, blob);
+    } catch (err) {
+      toast(err.message, "no");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button className="btn btn-sm" disabled={busy} onClick={descargar}>
+      <Download size={12} />{busy ? "Generando…" : "Descargar NDA de piloto"}
+    </button>
+  );
+}
+
 function Conectores({ token, socket, tenantId }) {
   const [refreshKey, setRefreshKey] = useState(0);
   const [activeMode, setActiveMode] = useState(null); // null | "A" | "B" | "C"
@@ -2561,11 +2603,18 @@ function Conectores({ token, socket, tenantId }) {
 
   return (
     <div className="fadein">
-      <Eyebrow>Integraciones de nómina</Eyebrow>
-      <h1 style={{ fontSize: 22, fontWeight: 700, margin: "5px 0 6px" }}>Integraciones de nómina</h1>
-      <div className="muted" style={{ fontSize: 13, marginBottom: 22, maxWidth: 640 }}>
+      <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 6 }}>
+        <div>
+          <Eyebrow>Integraciones de nómina</Eyebrow>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: "5px 0 0" }}>Integraciones de nómina</h1>
+        </div>
+        <NdaDownloadButton token={token} />
+      </div>
+      <div className="muted" style={{ fontSize: 13, marginBottom: 18, maxWidth: 640 }}>
         Conecta CÓDICE con tu sistema de nómina actual. Sin reemplazarlo. Sin migrar datos manualmente.
       </div>
+
+      <StorageWarningBanner token={token} />
 
       <ConnectedSourcesPanel token={token} socket={socket} refreshKey={refreshKey} onChanged={bump} tenantId={tenantId} />
 
@@ -2656,7 +2705,67 @@ function buildContract({ tipo, form, sd, planta }) {
 /* ============================================================
    LFT
    ============================================================ */
-function LFT() {
+function VacationPolicyPanel({ token }) {
+  const [policy, setPolicy] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const reload = useCallback(() => {
+    fetchVacationPolicy(token).then(setPolicy).catch((e) => setError(e.message));
+  }, [token]);
+  useEffect(() => { reload(); }, [reload]);
+
+  const set = (k) => (e) => setPolicy((p) => ({ ...p, [k]: e.target.type === "number" ? Number(e.target.value) : e.target.value }));
+
+  const guardar = async () => {
+    setBusy(true); setError(null);
+    try {
+      const saved = await updateVacationPolicy(token, {
+        year_1_days: policy.year_1_days, year_2_days: policy.year_2_days, year_3_days: policy.year_3_days,
+        year_4_days: policy.year_4_days, year_5_days: policy.year_5_days,
+        additional_days_per_5_years: policy.additional_days_per_5_years,
+        max_days: policy.max_days, notes: policy.notes,
+      });
+      setPolicy(saved);
+      toast("Política de vacaciones guardada.");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!policy) return <div className="muted" style={{ fontSize: 13, padding: "20px 0" }}>Cargando política…</div>;
+
+  return (
+    <div className="glass" style={{ padding: 20 }}>
+      <div className="row" style={{ justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
+        <Eyebrow>Política de Vacaciones</Eyebrow>
+        <span className="chip" style={{ color: policy.compliant ? "var(--emerald)" : "var(--rose)" }}>
+          {policy.compliant ? "Cumple con LFT 2026 ✅" : "⚠️ Revisar — por debajo del mínimo legal"}
+        </span>
+      </div>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 16 }}>Tu política debe ser igual o superior a la LFT 2026</div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
+        <div><label className="fld">Año 1 (mín. 12 por LFT)</label><input className="input" type="number" value={policy.year_1_days} onChange={set("year_1_days")} /></div>
+        <div><label className="fld">Año 2 (mín. 14)</label><input className="input" type="number" value={policy.year_2_days} onChange={set("year_2_days")} /></div>
+        <div><label className="fld">Año 3 (mín. 16)</label><input className="input" type="number" value={policy.year_3_days} onChange={set("year_3_days")} /></div>
+        <div><label className="fld">Año 4 (mín. 18)</label><input className="input" type="number" value={policy.year_4_days} onChange={set("year_4_days")} /></div>
+        <div><label className="fld">Año 5+ (mín. 20)</label><input className="input" type="number" value={policy.year_5_days} onChange={set("year_5_days")} /></div>
+        <div><label className="fld">Días adicionales cada 5 años</label><input className="input" type="number" value={policy.additional_days_per_5_years} onChange={set("additional_days_per_5_years")} /></div>
+        <div style={{ gridColumn: "1 / -1" }}><label className="fld">Días máximos acumulables</label><input className="input" type="number" value={policy.max_days} onChange={set("max_days")} /></div>
+      </div>
+      <label className="fld">Notas internas</label>
+      <textarea className="input" rows={3} value={policy.notes || ""} onChange={set("notes")} style={{ marginBottom: 14, resize: "vertical" }} />
+
+      {error && <div style={{ fontSize: 12.5, color: "var(--rose)", marginBottom: 12 }}>{error}</div>}
+      <button className="btn btn-accent" disabled={busy} onClick={guardar}>{busy ? "Guardando…" : "Guardar política"}</button>
+    </div>
+  );
+}
+
+function LFT({ token }) {
   const [tab, setTab] = useState("aguinaldo");
   const [sal, setSal] = useState(15000); const [anios, setAnios] = useState(3); const [diasTrab, setDiasTrab] = useState(220); const [salMin, setSalMin] = useState(278.8);
   const sd = sal / 30;
@@ -2692,9 +2801,10 @@ function LFT() {
           <div className="muted2" style={{ fontSize: 11, marginTop: 12, lineHeight: 1.5 }}>Cálculos referenciales basados en la LFT. No sustituyen asesoría jurídica.</div>
         </div>
         <div>
-          <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 14 }}><Tab id="aguinaldo" label="Aguinaldo" /><Tab id="vacaciones" label="Vacaciones" /><Tab id="finiquito" label="Finiquito" /><Tab id="indemniz" label="Indemnización" /><Tab id="articulos" label="Artículos" /></div>
+          <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 14 }}><Tab id="aguinaldo" label="Aguinaldo" /><Tab id="vacaciones" label="Vacaciones" /><Tab id="politica" label="Política de Vacaciones" /><Tab id="finiquito" label="Finiquito" /><Tab id="indemniz" label="Indemnización" /><Tab id="articulos" label="Artículos" /></div>
           {tab === "aguinaldo" && <div className="glass" style={{ padding: 20 }}><Eyebrow>Aguinaldo · Art. 87</Eyebrow><div className="kpi" style={{ fontSize: 38, color: "var(--cyan)", margin: "10px 0" }}>{mxn(c.ag)}</div><div className="muted" style={{ fontSize: 13 }}>15 días sobre salario diario de {mxn2(sd)}.</div><div className="glass-2" style={{ padding: 13, marginTop: 14 }}><KV k="Proporcional por días trabajados" v={mxn(c.agProp)} /></div><div className="muted2" style={{ fontSize: 11, marginTop: 12 }}>La propuesta de "aguinaldo digno" (30 días) sigue en discusión; aún no es ley.</div></div>}
           {tab === "vacaciones" && <div className="glass" style={{ padding: 20 }}><Eyebrow>Vacaciones · Art. 76 + Prima Art. 80</Eyebrow><div className="row" style={{ gap: 16, margin: "12px 0", flexWrap: "wrap" }}><Stat label="Días por año" value={`${c.dv}`} /><Stat label="Prima vacacional 25%" value={mxn(c.pv)} accent="var(--violet)" /></div><ResponsiveContainer width="100%" height={150}><AreaChart data={[1, 2, 3, 4, 5, 6, 10, 15].map((y) => ({ y: `${y}a`, d: diasVacaciones(y) }))}><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--cyan)" stopOpacity={.5} /><stop offset="100%" stopColor="var(--cyan)" stopOpacity={0} /></linearGradient></defs><XAxis dataKey="y" tick={{ fill: "var(--muted)", fontSize: 11 }} axisLine={false} tickLine={false} /><Tooltip contentStyle={tipStyle} /><Area dataKey="d" stroke="var(--cyan)" fill="url(#g)" strokeWidth={2} /></AreaChart></ResponsiveContainer></div>}
+          {tab === "politica" && <VacationPolicyPanel token={token} />}
           {tab === "finiquito" && <div className="glass" style={{ padding: 20 }}><Eyebrow>Finiquito (renuncia / término normal)</Eyebrow><div className="kpi" style={{ fontSize: 34, color: "var(--emerald)", margin: "10px 0" }}>{mxn(c.fin)}</div><div className="glass-2" style={{ padding: 14, display: "flex", flexDirection: "column", gap: 8 }}><KV k="Aguinaldo proporcional" v={mxn(c.agProp)} /><KV k={`Vacaciones (${c.dv} días)`} v={mxn(c.dv * sd)} /><KV k="Prima vacacional 25%" v={mxn(c.pv)} /></div></div>}
           {tab === "indemniz" && <div className="glass" style={{ padding: 20 }}><Eyebrow>Indemnización por despido injustificado · Art. 48–50</Eyebrow><div className="kpi" style={{ fontSize: 34, color: "var(--amber)", margin: "10px 0" }}>{mxn(c.ind)}</div><div className="glass-2" style={{ padding: 14, display: "flex", flexDirection: "column", gap: 8 }}><KV k="3 meses de salario" v={mxn(sal * 3)} /><KV k={`20 días × año (${anios})`} v={mxn(sd * 20 * anios)} /><KV k="Prima de antigüedad (topada)" v={mxn(c.pa)} /><KV k="+ Finiquito" v={mxn(c.fin)} /></div></div>}
           {tab === "articulos" && <div className="glass" style={{ padding: 6 }}><table className="tbl"><thead><tr><th>Artículo</th><th>Tema</th><th>Resumen</th></tr></thead><tbody>{arts.map((a) => <tr key={a[0]} style={{ cursor: "default" }}><td className="mono" style={{ color: "var(--cyan)", whiteSpace: "nowrap" }}>{a[0]}</td><td style={{ fontWeight: 500, whiteSpace: "nowrap" }}>{a[1]}</td><td className="muted">{a[2]}</td></tr>)}</tbody></table></div>}
@@ -3563,7 +3673,7 @@ export default function App() {
           {view === "whatsapp" && <WhatsAppPage token={token} />}
           {view === "asistencia" && <Asistencia staff={staff} attendance={attendance} openExpediente={openExpediente} />}
           {view === "contratos" && <Contratos staff={staff} />}
-          {view === "lft" && <LFT />}
+          {view === "lft" && <LFT token={token} />}
           {view === "filtro" && <FiltroDash staff={staff} />}
           {view === "capacitacion" && <Capacitacion staff={staff} />}
           {view === "senalizacion" && <Senalizacion />}

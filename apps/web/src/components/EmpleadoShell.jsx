@@ -202,7 +202,7 @@ const NODE_BASE = "#3b82f6";
 const NODE_TRANSITION = "#60a5fa"; // tono durante la "respiración" de módulo
 const LINE_BASE = "#2563eb";
 const LINE_TRANSITION = "#60a5fa";
-const SUCCESS_COLOR = "#10b981";
+const SUCCESS_COLOR = "#00c896"; // --codice-signal — nodo activo en pulso de éxito
 
 function rand(min, max) { return min + Math.random() * (max - min); }
 function clamp01(v) { return Math.max(0, Math.min(1, v)); }
@@ -512,14 +512,20 @@ const CSS = `
 :root{
   --bg-base:#020917; --bg-deep:#030d1f;
   --surface-1:rgba(6,20,45,.85); --surface-2:rgba(10,28,60,.70); --surface-3:rgba(15,35,75,.50);
-  --border-dim:rgba(255,255,255,.06); --border-glow:rgba(255,255,255,.14);
-  --text-primary:#f0f4ff; --text-secondary:rgba(240,244,255,.62); --text-muted:rgba(240,244,255,.35);
-  --accent-blue:#2563eb; --accent-blue-bright:#3b82f6;
-  --accent-green:#10b981; --accent-green-dim:rgba(16,185,129,.15);
-  --accent-amber:#f59e0b; --accent-red:#ef4444; --accent-white:#fff;
+  --border-dim:rgba(255,255,255,.07); --border-glow:rgba(255,255,255,.14);
+  --text-primary:#e8f0fe; --text-secondary:rgba(232,240,254,.62); --text-muted:rgba(232,240,254,.45);
+  --accent-blue:#2563eb; --accent-blue-bright:#4db8ff;
+  --accent-green:#00c896; --accent-green-dim:rgba(0,200,150,.15);
+  --accent-amber:#f5c518; --accent-red:#ef4444; --accent-white:#fff;
+  /* Alias explícitos de la identidad CÓDICE — mismos valores que los vars de arriba */
+  --codice-ink:#020917;--codice-surface:#06142d;--codice-border:rgba(255,255,255,0.07);
+  --codice-signal:#00c896;--codice-alert:#f5c518;--codice-data:#4db8ff;
+  --codice-text:#e8f0fe;--codice-muted:rgba(232,240,254,0.45);
 }
-.empshell{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--text-primary);min-height:100vh;position:relative}
-.empshell .mono{font-family:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;font-variant-numeric:tabular-nums}
+body{font-family:'DM Sans',system-ui,-apple-system,"Segoe UI",sans-serif}
+.mono,code,.amount{font-family:'DM Mono',ui-monospace,"SF Mono",Menlo,monospace}
+.empshell{font-family:'DM Sans',system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--text-primary);min-height:100vh;position:relative}
+.empshell .mono{font-family:'DM Mono',ui-monospace,"SF Mono",Menlo,monospace;font-variant-numeric:tabular-nums}
 .emp-canvas{position:fixed;inset:0;z-index:0;width:100vw;height:100vh;pointer-events:none}
 .emp-bgwash{position:fixed;inset:0;z-index:0;pointer-events:none;
   background:

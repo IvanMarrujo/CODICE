@@ -7,6 +7,8 @@
 import { Router, Request, Response, NextFunction } from 'express'
 import { z } from 'zod'
 import { AppError } from '../lib/errors'
+import { authMiddleware } from '../middleware/auth'
+import { tenantMiddleware } from '../middleware/tenant'
 
 const router = Router()
 
@@ -22,6 +24,36 @@ function diasVacaciones(antiguedad: number): number {
   const bloquesExtra = Math.ceil((antiguedad - 5) / 5)
   return 20 + bloquesExtra * 2
 }
+
+// ── Política interna de vacaciones (opcional, por tenant) ──────────────
+// Siempre >= LFT — ver enforcement en /vacaciones y en PATCH /api/settings/vacation-policy.
+
+interface VacationPolicy {
+  year_1_days: number; year_2_days: number; year_3_days: number
+  year_4_days: number; year_5_days: number; additional_days_per_5_years: number
+  max_days: number
+}
+
+function diasPorPolitica(policy: VacationPolicy, antiguedad: number): number {
+  if (antiguedad <= 0) return 0
+  const tier = Math.floor(antiguedad)
+  let dias: number
+  if (tier === 1) dias = policy.year_1_days
+  else if (tier === 2) dias = policy.year_2_days
+  else if (tier === 3) dias = policy.year_3_days
+  else if (tier === 4) dias = policy.year_4_days
+  else {
+    const bloquesExtra = Math.floor((tier - 5) / 5)
+    dias = policy.year_5_days + bloquesExtra * policy.additional_days_per_5_years
+  }
+  return Math.min(dias, policy.max_days)
+}
+
+// Mínimos legales por tramo — usados para validar que una política interna
+// nunca ofrezca menos que la ley (Art. 76 LFT, reforma "vacaciones dignas").
+export const LFT_MINIMOS = {
+  year_1_days: 12, year_2_days: 14, year_3_days: 16, year_4_days: 18, year_5_days: 20,
+} as const
 
 // ── Jornada laboral — calendario de reducción escalonada 2026-2030 ────
 
@@ -73,14 +105,31 @@ const vacacionesSchema = z.object({
   salarioBase: z.coerce.number().optional(),
 })
 
-router.get('/vacaciones', (req: Request, res: Response, next: NextFunction) => {
+// Requiere auth solo en esta ruta (las demás de este router son cálculos
+// puros sin estado, sin tenant) — es la única que necesita saber si el
+// tenant tiene una política interna configurada.
+router.get('/vacaciones', authMiddleware, tenantMiddleware, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { antiguedad, salarioBase } = vacacionesSchema.parse(req.query)
-    const dias = diasVacaciones(antiguedad)
+    const lftDias = diasVacaciones(antiguedad)
+
+    let dias = lftDias
+    let fuente: 'POLITICA_INTERNA' | 'LFT_2026' = 'LFT_2026'
+
+    const policyRows = await req.tenantDb.$queryRaw<VacationPolicy[]>`
+      SELECT year_1_days, year_2_days, year_3_days, year_4_days, year_5_days, additional_days_per_5_years, max_days
+      FROM vacation_policy WHERE tenant_id = ${req.tenant.id} LIMIT 1
+    `
+    const policy = policyRows[0]
+    if (policy) {
+      dias = Math.max(diasPorPolitica(policy, antiguedad), lftDias) // nunca menos que la ley
+      fuente = 'POLITICA_INTERNA'
+    }
+
     const salarioDiario = salarioBase ? round2(salarioBase / 30) : undefined
     const primaVacacional = salarioDiario ? round2(salarioDiario * dias * 0.25) : undefined
 
-    res.json({ antiguedad, dias, primaVacacional, salarioBase: salarioBase ?? null })
+    res.json({ antiguedad, dias, primaVacacional, fuente, salarioBase: salarioBase ?? null })
   } catch (err) {
     next(err)
   }
