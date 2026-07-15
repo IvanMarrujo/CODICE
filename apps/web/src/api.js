@@ -271,6 +271,10 @@ export function fetchEmployeeHealth(token, employeeId) {
   return authedFetch(token, `/api/employees/${employeeId}/health`);
 }
 
+export function fetchHealthDocumentInsights(token, employeeId, docId) {
+  return authedFetch(token, `/api/employees/${employeeId}/health/documents/${docId}/insights`);
+}
+
 export function updateEmployeeHealth(token, employeeId, payload) {
   return authedFetchJSON(token, `/api/employees/${employeeId}/health`, "PATCH", payload);
 }

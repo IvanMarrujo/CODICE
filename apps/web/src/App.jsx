@@ -23,7 +23,7 @@ import {
   createEmployee, updateEmployee, deleteEmployee, bulkDeleteEmployees,
   deletePayrollRecord, bulkDeletePayrollRecords,
   fetchEmployeeStatusSummary, fetchEmployeeHealth, updateEmployeeHealth,
-  uploadHealthDocument, deleteHealthDocument, downloadHealthDocument,
+  uploadHealthDocument, deleteHealthDocument, downloadHealthDocument, fetchHealthDocumentInsights,
 } from "./api.js";
 
 // Credenciales de auto-login del cockpit admin (tenant único GFP). Vienen de
@@ -1066,9 +1066,64 @@ function InlineEditField({ value, placeholder, onSave, type = "text" }) {
   );
 }
 
+const NIVEL_STYLE = {
+  normal:   { color: "var(--emerald)", icon: "✅", label: "NORMAL" },
+  "atención": { color: "var(--amber)", icon: "⚠️", label: "ATENCIÓN" },
+  urgente:  { color: "var(--rose)", icon: "🔴", label: "URGENTE" },
+};
+
+function HealthInsightsCard({ insights }) {
+  if (insights.status === "processing") {
+    return <div className="muted" style={{ fontSize: 12, marginTop: 8, animation: "blink 1.4s infinite" }}>🔬 Analizando documento…</div>;
+  }
+  if (insights.status === "error") {
+    return <div style={{ fontSize: 12, marginTop: 8, color: "var(--rose)" }}>No se pudo analizar el documento{insights.analysisError ? `: ${insights.analysisError}` : ""}.</div>;
+  }
+  if (!insights.insights) return null;
+  return (
+    <div className="glass-2" style={{ padding: "12px 14px", marginTop: 8 }}>
+      <div className="row" style={{ gap: 7, marginBottom: 8 }}>
+        <span style={{ fontSize: 12.5, fontWeight: 600 }}>🔬 {insights.tipo}</span>
+        {insights.fecha_documento && <span className="muted2" style={{ fontSize: 11 }}>· {insights.fecha_documento}</span>}
+      </div>
+      {insights.resumen && <div className="muted" style={{ fontSize: 12, lineHeight: 1.5, marginBottom: 10 }}>{insights.resumen}</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {(insights.insights || []).map((it, i) => {
+          const s = NIVEL_STYLE[it.nivel] || NIVEL_STYLE.normal;
+          return (
+            <div key={i} className="row" style={{ gap: 8, fontSize: 12 }}>
+              <span className="dot" style={{ background: s.color, flexShrink: 0 }} />
+              <span style={{ flex: 1 }}>{it.categoria}: {it.hallazgo}</span>
+              <span className="mono" style={{ fontSize: 10.5, color: s.color, flexShrink: 0 }}>{s.icon} {s.label}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function useHealthDocumentInsights(token, employeeId, doc) {
+  const [insights, setInsights] = useState({ status: doc.status || "ready", tipo: doc.tipo, fecha_documento: doc.fecha_documento, insights: doc.insights, resumen: doc.resumen, analysisError: doc.analysisError });
+  useEffect(() => {
+    if (insights.status !== "processing") return;
+    let stopped = false;
+    const poll = () => {
+      fetchHealthDocumentInsights(token, employeeId, doc.id)
+        .then((data) => { if (!stopped) { setInsights(data); if (data.status === "processing") t = setTimeout(poll, 3000); } })
+        .catch(() => { if (!stopped) t = setTimeout(poll, 5000); });
+    };
+    let t = setTimeout(poll, 3000);
+    return () => { stopped = true; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc.id]);
+  return insights;
+}
+
 function HealthDocRow({ doc, token, employeeId, onDeleted }) {
   const [busy, setBusy] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const insights = useHealthDocumentInsights(token, employeeId, doc);
 
   const doDownload = async () => {
     try {
@@ -1087,18 +1142,21 @@ function HealthDocRow({ doc, token, employeeId, onDeleted }) {
   };
 
   return (
-    <div className="glass-2 row" style={{ padding: "10px 12px", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
-      <div className="row" style={{ gap: 9, minWidth: 0 }}>
-        <FileHeart size={15} className="muted2" style={{ flexShrink: 0 }} />
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{doc.filename}</div>
-          <div className="muted2" style={{ fontSize: 10.5 }}>{fmtDateShort(doc.uploadedAt)} · {fmtBytes(doc.size)}</div>
+    <div className="glass-2" style={{ padding: "10px 12px", marginBottom: 8 }}>
+      <div className="row" style={{ justifyContent: "space-between", gap: 10 }}>
+        <div className="row" style={{ gap: 9, minWidth: 0 }}>
+          <FileHeart size={15} className="muted2" style={{ flexShrink: 0 }} />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{doc.filename}</div>
+            <div className="muted2" style={{ fontSize: 10.5 }}>{fmtDateShort(doc.uploadedAt)} · {fmtBytes(doc.size)}</div>
+          </div>
+        </div>
+        <div className="row" style={{ gap: 6, flexShrink: 0 }}>
+          <button className="btn btn-sm" title="Descargar" onClick={doDownload}><Download size={12} /></button>
+          <button className="btn btn-sm" title="Eliminar" style={{ color: "var(--rose)" }} onClick={() => setConfirmOpen(true)}><Trash2 size={12} /></button>
         </div>
       </div>
-      <div className="row" style={{ gap: 6, flexShrink: 0 }}>
-        <button className="btn btn-sm" title="Descargar" onClick={doDownload}><Download size={12} /></button>
-        <button className="btn btn-sm" title="Eliminar" style={{ color: "var(--rose)" }} onClick={() => setConfirmOpen(true)}><Trash2 size={12} /></button>
-      </div>
+      <HealthInsightsCard insights={insights} />
       {confirmOpen && (
         <ConfirmModal
           title="Eliminar documento" tone="danger" confirmLabel="Eliminar"
@@ -1112,8 +1170,7 @@ function HealthDocRow({ doc, token, employeeId, onDeleted }) {
   );
 }
 
-function SaludTab({ e, token }) {
-  const health = useEmployeeHealth(token, e.dbId);
+function SaludTab({ e, token, health }) {
   const [uploading, setUploading] = useState(false);
 
   const save = useCallback((patch) => {
@@ -1222,6 +1279,8 @@ function SaludTab({ e, token }) {
 
 function ProfileDrawer({ e, onClose, setStatus, update, token, initialTab }) {
   const [tab, setTab] = useState(initialTab || "resumen");
+  const health = useEmployeeHealth(token, e.dbId);
+  const urgentCount = (health.data?.documentos || []).filter((d) => (d.insights || []).some((i) => i.nivel === "urgente")).length;
   return (
     <><div className="scrim" onClick={onClose} />
       <div className="drawer" style={{ padding: 22 }}>
@@ -1232,11 +1291,14 @@ function ProfileDrawer({ e, onClose, setStatus, update, token, initialTab }) {
         </div>
         <div className="row" style={{ gap: 6, marginBottom: 18 }}>
           <span className={`tabbtn ${tab === "resumen" ? "on" : ""}`} onClick={() => setTab("resumen")}>Resumen</span>
-          <span className={`tabbtn ${tab === "salud" ? "on" : ""}`} onClick={() => setTab("salud")}><FileHeart size={12} />Salud</span>
+          <span className={`tabbtn ${tab === "salud" ? "on" : ""}`} onClick={() => setTab("salud")}>
+            <FileHeart size={12} />Salud
+            {urgentCount > 0 && <span className="chip" style={{ color: "#fff", background: "var(--rose)", borderColor: "var(--rose)", padding: "1px 6px", fontSize: 10 }}>{urgentCount}</span>}
+          </span>
           <span className={`tabbtn ${tab === "nomina" ? "on" : ""}`} onClick={() => setTab("nomina")}><DollarSign size={12} />Nómina</span>
         </div>
         {tab === "resumen" && <ResumenTab e={e} setStatus={setStatus} update={update} />}
-        {tab === "salud" && <SaludTab e={e} token={token} />}
+        {tab === "salud" && <SaludTab e={e} token={token} health={health} />}
         {tab === "nomina" && <NominaTab e={e} token={token} />}
       </div></>
   );
@@ -3160,6 +3222,15 @@ export default function App() {
     setSocket(s);
     return () => { s.disconnect(); setSocket(null); };
   }, [tenantId]);
+
+  // Alerta de salud urgente detectada por el análisis de IA de un documento
+  // médico — ver routes/health.ts (analyzeHealthDocument).
+  useEffect(() => {
+    if (!socket) return;
+    const onAlert = (data) => toast(`⚠️ Hallazgo urgente en documento médico (${data.filename})`, "no");
+    socket.on("health:alert", onAlert);
+    return () => socket.off("health:alert", onAlert);
+  }, [socket]);
 
   const attendance = useAttendance(token, socket);
 
