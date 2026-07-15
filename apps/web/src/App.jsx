@@ -10,7 +10,7 @@ import {
   ShieldCheck, CalendarDays, FileText, RefreshCw, Check, Inbox, Factory,
   GraduationCap, Monitor, Activity, Award, Maximize, ChevronLeft, Megaphone,
   TrendingUp, ClipboardCheck, UserCheck, Zap, Plug, MapPin, QrCode, DollarSign, Upload,
-  Pause, Play, Trash2, Unplug, Pencil, CheckSquare, Square,
+  Pause, Play, Trash2, Unplug, Pencil, CheckSquare, Square, Lock, FileHeart,
 } from "lucide-react";
 import { io } from "socket.io-client";
 import {
@@ -22,10 +22,19 @@ import {
   fetchAgentStatus, downloadAgentZip,
   createEmployee, updateEmployee, deleteEmployee, bulkDeleteEmployees,
   deletePayrollRecord, bulkDeletePayrollRecords,
+  fetchEmployeeStatusSummary, fetchEmployeeHealth, updateEmployeeHealth,
+  uploadHealthDocument, deleteHealthDocument, downloadHealthDocument,
 } from "./api.js";
 
-// Credenciales de demo locales (tenant único GFP) — solo desarrollo.
-const AUTH = { slug: "gfp", email: "admin@gfp.mx", password: "ROTATED_SEE_ENV_VAR" };
+// Credenciales de auto-login del cockpit admin (tenant único GFP). Vienen de
+// env vars (VITE_ADMIN_EMAIL/VITE_ADMIN_PASSWORD) en vez de hardcodeadas en
+// el código fuente — igual terminan en el bundle público (es un auto-login
+// client-side), pero así no quedan pegadas en el historial de git.
+const AUTH = {
+  slug: "gfp",
+  email: import.meta.env.VITE_ADMIN_EMAIL || "admin@gfp.mx",
+  password: import.meta.env.VITE_ADMIN_PASSWORD || "",
+};
 
 /* ============================================================
    CÓDICE · Control de personal con LFT en línea
@@ -149,6 +158,14 @@ const mxn2 = (n) => new Intl.NumberFormat("es-MX", { style: "currency", currency
 const todayISO = new Date().toISOString().slice(0, 10);
 
 const STATUS = { Activo: "var(--emerald)", Vacaciones: "var(--cyan)", Incapacidad: "var(--amber)", Permiso: "var(--violet)", "Periodo de prueba": "#9aa6b8", "Baja pendiente": "var(--rose)" };
+// Paleta fija para el donut de "Status de plantilla" — colores explícitos
+// (no CSS vars) para que coincidan exactamente con el diseño acordado.
+const STATUS_DONUT_COLOR = {
+  Activo: "#10b981", Vacaciones: "#3b82f6", Incapacidad: "#f59e0b", Permiso: "#a78bfa",
+  "Baja pendiente": "#fb7185", "Periodo de prueba": "#56d4f0", Baja: "#4a5568",
+};
+const STATUS_DONUT_ORDER = ["Activo", "Vacaciones", "Incapacidad", "Permiso", "Baja pendiente", "Periodo de prueba", "Baja"];
+const TIPOS_SANGRE = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
 const CONTRATOS = ["Indeterminado", "Determinado", "Obra/Proyecto", "Periodo de prueba", "Capacitación inicial"];
 const TURNOS = ["Matutino", "Vespertino", "Nocturno", "Mixto"];
 const TURNO_COLOR = { Matutino: "var(--amber)", Vespertino: "var(--violet)", Nocturno: "var(--cyan)", Mixto: "var(--emerald)" };
@@ -318,6 +335,7 @@ const COCKPIT_DEFAULT = [
   { id: "headcount_hoy", x: 0, y: 570, w: 932, h: 560 },
   { id: "sync", x: 0, y: 1146, w: 456, h: 108 },
   { id: "nomina", x: 476, y: 1146, w: 456, h: 430 },
+  { id: "status_plantilla", x: 0, y: 1592, w: 932, h: 320 },
 ];
 
 function NominaWidget({ token, go }) {
@@ -378,7 +396,59 @@ function WidgetShell({ id, title, badge, active, onStart, setRef, x, y, w, h, ch
   );
 }
 
-function Cockpit({ staff, solicitudes, resolver, go, attendance, openExpediente, token }) {
+function StatusPlantillaWidget({ token, onFilterStatus }) {
+  const [state, setState] = useState({ status: "loading", data: null });
+  useEffect(() => {
+    if (!token) return;
+    fetchEmployeeStatusSummary(token)
+      .then((data) => setState({ status: "ready", data }))
+      .catch((e) => setState({ status: "error", data: null, error: e.message }));
+  }, [token]);
+
+  if (state.status === "loading") return <div className="muted" style={{ fontSize: 12.5 }}>Cargando…</div>;
+  if (state.status === "error") return <div style={{ fontSize: 12.5, color: "var(--rose)" }}>{state.error}</div>;
+
+  const s = state.data;
+  const total = s.total || 0;
+  const rows = STATUS_DONUT_ORDER.map((name) => ({ name, value: s[name] || 0, fill: STATUS_DONUT_COLOR[name] })).filter((r) => r.value > 0);
+  const situacionEspecial = (s["Vacaciones"] || 0) + (s["Incapacidad"] || 0) + (s["Permiso"] || 0) + (s["Baja pendiente"] || 0) + (s["Periodo de prueba"] || 0);
+
+  return (
+    <div>
+      <div className="row" style={{ gap: 18, alignItems: "center" }}>
+        <ResponsiveContainer width={180} height={180}>
+          <PieChart>
+            <Pie data={rows} dataKey="value" nameKey="name" innerRadius={54} outerRadius={82} paddingAngle={2} stroke="none">
+              {rows.map((r) => <Cell key={r.name} fill={r.fill} cursor="pointer" onClick={() => onFilterStatus?.(r.name)} />)}
+            </Pie>
+            <Tooltip contentStyle={tipStyle} formatter={(v, n) => [`${v} (${total ? Math.round((v / total) * 100) : 0}%)`, n]} />
+          </PieChart>
+        </ResponsiveContainer>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 7, minWidth: 0 }}>
+          {rows.map((r) => (
+            <div
+              key={r.name} className="row"
+              style={{ gap: 9, cursor: "pointer", padding: "3px 6px", borderRadius: 8, transition: ".12s" }}
+              onClick={() => onFilterStatus?.(r.name)}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--glass-2)")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <span className="dot" style={{ background: r.fill }} />
+              <span style={{ flex: 1, fontSize: 12.5 }}>{r.name}</span>
+              <span className="mono" style={{ fontSize: 12.5, fontWeight: 600 }}>{r.value}</span>
+              <span className="muted2 mono" style={{ fontSize: 11, width: 36, textAlign: "right" }}>{total ? Math.round((r.value / total) * 100) : 0}%</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="muted" style={{ fontSize: 12, marginTop: 14, textAlign: "center" }}>
+        {s["Activo"] || 0} activos · {situacionEspecial} en situación especial · {s["Baja"] || 0} bajas
+      </div>
+    </div>
+  );
+}
+
+function Cockpit({ staff, solicitudes, resolver, go, attendance, openExpediente, token, onFilterPlantillaStatus }) {
   const total = staff.length;
   const byStatus = useMemo(() => { const m = {}; staff.forEach((e) => (m[e.status] = (m[e.status] || 0) + 1)); return Object.entries(m).map(([name, value]) => ({ name, value, fill: STATUS[name] })); }, [staff]);
   const byTurno = useMemo(() => TURNOS.map((t) => ({ name: t, value: staff.filter((e) => e.turno === t).length, fill: TURNO_COLOR[t] })), [staff]);
@@ -524,6 +594,10 @@ function Cockpit({ staff, solicitudes, resolver, go, attendance, openExpediente,
         <WidgetShell id="nomina" title="Nómina · período actual" active={activeId === "nomina"} onStart={onStart} setRef={setRef("nomina")} {...pos("nomina")}>
           <NominaWidget token={token} go={go} />
         </WidgetShell>
+
+        <WidgetShell id="status_plantilla" title="STATUS DE PLANTILLA" active={activeId === "status_plantilla"} onStart={onStart} setRef={setRef("status_plantilla")} {...pos("status_plantilla")}>
+          <StatusPlantillaWidget token={token} onFilterStatus={onFilterPlantillaStatus} />
+        </WidgetShell>
       </div>
     </div>
   );
@@ -569,8 +643,8 @@ function usePayrollLatestMap(token) {
   return map;
 }
 
-function Plantilla({ staff, token, openExpediente, socket, refreshStaff }) {
-  const [q, setQ] = useState(""); const [fStatus, setFStatus] = useState("Todos"); const [fDepto, setFDepto] = useState("Todos");
+function Plantilla({ staff, token, openExpediente, socket, refreshStaff, initialStatusFilter }) {
+  const [q, setQ] = useState(""); const [fStatus, setFStatus] = useState(initialStatusFilter || "Todos"); const [fDepto, setFDepto] = useState("Todos");
   const [nuevo, setNuevo] = useState(false);
   const [sortNeto, setSortNeto] = useState(null); // null | "asc" | "desc"
   const [selected, setSelected] = useState(() => new Set());
@@ -646,7 +720,7 @@ function Plantilla({ staff, token, openExpediente, socket, refreshStaff }) {
           <Search size={15} className="muted" />
           <input className="input" style={{ border: "none", background: "transparent", padding: "10px 0" }} placeholder="Buscar por nombre o ID…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
-        <select className="select" style={{ width: 160 }} value={fStatus} onChange={(e) => setFStatus(e.target.value)}><option>Todos</option>{Object.keys(STATUS).map((s) => <option key={s}>{s}</option>)}</select>
+        <select className="select" style={{ width: 160 }} value={fStatus} onChange={(e) => setFStatus(e.target.value)}><option>Todos</option>{Object.keys(STATUS).map((s) => <option key={s}>{s}</option>)}<option>Baja</option></select>
         <select className="select" style={{ width: 180 }} value={fDepto} onChange={(e) => setFDepto(e.target.value)}>{deptos.map((d) => <option key={d}>{d}</option>)}</select>
         <button className="btn btn-accent" onClick={() => setNuevo(true)}><Plus size={14} />Agregar empleado</button>
         <button className="btn" onClick={() => { download(`plantilla_gfp_${todayISO}.csv`, toCSV(rows)); toast(`CSV exportado · ${rows.length} filas`); }}><Download size={14} />Exportar CSV</button>
@@ -741,6 +815,7 @@ function Plantilla({ staff, token, openExpediente, socket, refreshStaff }) {
 const Mini = ({ label, v }) => <div className="glass-2" style={{ padding: "9px 12px" }}><div className="muted2" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".12em" }}>{label}</div><div style={{ fontSize: 13.5, fontWeight: 500, marginTop: 3 }}>{v}</div></div>;
 
 function fmtDateShort(d) { return d ? new Date(d).toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }) : "—"; }
+function fmtBytes(n) { if (!n) return "0 KB"; const kb = n / 1024; return kb < 1024 ? `${Math.round(kb)} KB` : `${(kb / 1024).toFixed(1)} MB`; }
 
 function useEmployeePayroll(token, employeeDbId) {
   const [state, setState] = useState({ status: "loading", data: [] });
@@ -926,6 +1001,225 @@ function ResumenTab({ e, setStatus, update }) {
   );
 }
 
+/* ============================================================
+   SALUD — perfil de salud confidencial (LFPDPPP Art. 8)
+   ============================================================ */
+
+function useEmployeeHealth(token, employeeId) {
+  const [state, setState] = useState({ status: "loading", data: null });
+  const reload = useCallback(() => {
+    if (!token || !employeeId) return;
+    setState((s) => ({ ...s, status: "loading" }));
+    fetchEmployeeHealth(token, employeeId)
+      .then((data) => setState({ status: "ready", data }))
+      .catch((e) => setState({ status: "error", data: null, error: e.message }));
+  }, [token, employeeId]);
+  useEffect(() => { reload(); }, [reload]);
+  return { ...state, reload };
+}
+
+function TagInput({ tags, onChange, placeholder }) {
+  const [input, setInput] = useState("");
+  const add = () => {
+    const v = input.trim();
+    if (!v || tags.includes(v)) { setInput(""); return; }
+    onChange([...tags, v]);
+    setInput("");
+  };
+  return (
+    <div>
+      {tags.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 10 }}>
+          {tags.map((t) => (
+            <span key={t} className="chip" style={{ gap: 6, background: "var(--glass-2)" }}>
+              {t}
+              <X size={11} className="muted2" style={{ cursor: "pointer" }} onClick={() => onChange(tags.filter((x) => x !== t))} />
+            </span>
+          ))}
+        </div>
+      )}
+      <input
+        className="input" placeholder={placeholder} value={input}
+        onChange={(ev) => setInput(ev.target.value)}
+        onKeyDown={(ev) => { if (ev.key === "Enter") { ev.preventDefault(); add(); } }}
+      />
+    </div>
+  );
+}
+
+// Campo inline: sin borde/fondo hasta enfocar, guarda al perder foco.
+function InlineEditField({ value, placeholder, onSave, type = "text" }) {
+  const [v, setV] = useState(value || "");
+  useEffect(() => { setV(value || ""); }, [value]);
+  const style = {
+    fontFamily: "var(--font)", fontSize: 13, color: "var(--text)", background: "transparent",
+    border: "none", borderBottom: "1.5px solid transparent", borderRadius: 0, padding: "6px 2px",
+    width: "100%", outline: "none", transition: ".15s",
+  };
+  return (
+    <input
+      className="inline-edit" type={type} placeholder={placeholder} value={v} style={style}
+      onChange={(e) => setV(e.target.value)}
+      onFocus={(e) => (e.target.style.borderBottomColor = "var(--cyan)")}
+      onBlur={(e) => { e.target.style.borderBottomColor = "transparent"; if ((v || null) !== (value || null)) onSave(v || null); }}
+    />
+  );
+}
+
+function HealthDocRow({ doc, token, employeeId, onDeleted }) {
+  const [busy, setBusy] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const doDownload = async () => {
+    try {
+      const { blob, filename } = await downloadHealthDocument(token, employeeId, doc.id, doc.filename);
+      downloadBlobFile(filename, blob);
+    } catch (err) { toast(err.message, "no"); }
+  };
+
+  const doDelete = async () => {
+    setBusy(true);
+    try {
+      await deleteHealthDocument(token, employeeId, doc.id);
+      setConfirmOpen(false);
+      onDeleted?.();
+    } catch (err) { toast(err.message, "no"); } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="glass-2 row" style={{ padding: "10px 12px", justifyContent: "space-between", gap: 10, marginBottom: 8 }}>
+      <div className="row" style={{ gap: 9, minWidth: 0 }}>
+        <FileHeart size={15} className="muted2" style={{ flexShrink: 0 }} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{doc.filename}</div>
+          <div className="muted2" style={{ fontSize: 10.5 }}>{fmtDateShort(doc.uploadedAt)} · {fmtBytes(doc.size)}</div>
+        </div>
+      </div>
+      <div className="row" style={{ gap: 6, flexShrink: 0 }}>
+        <button className="btn btn-sm" title="Descargar" onClick={doDownload}><Download size={12} /></button>
+        <button className="btn btn-sm" title="Eliminar" style={{ color: "var(--rose)" }} onClick={() => setConfirmOpen(true)}><Trash2 size={12} /></button>
+      </div>
+      {confirmOpen && (
+        <ConfirmModal
+          title="Eliminar documento" tone="danger" confirmLabel="Eliminar"
+          message={`¿Eliminar "${doc.filename}"? Esta acción no se puede deshacer.`}
+          busy={busy}
+          onCancel={() => setConfirmOpen(false)}
+          onConfirm={doDelete}
+        />
+      )}
+    </div>
+  );
+}
+
+function SaludTab({ e, token }) {
+  const health = useEmployeeHealth(token, e.dbId);
+  const [uploading, setUploading] = useState(false);
+
+  const save = useCallback((patch) => {
+    updateEmployeeHealth(token, e.dbId, patch).then(health.reload).catch((err) => toast(err.message, "no"));
+  }, [token, e.dbId, health.reload]);
+
+  const onDropFiles = async (files) => {
+    setUploading(true);
+    try {
+      for (const file of Array.from(files)) {
+        if (file.size > 10 * 1024 * 1024) { toast(`"${file.name}" supera 10MB`, "no"); continue; }
+        await uploadHealthDocument(token, e.dbId, file);
+      }
+      health.reload();
+    } catch (err) {
+      toast(err.message, "no");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  if (health.status === "loading") return <div className="muted" style={{ fontSize: 13, padding: "20px 0" }}>Cargando perfil de salud…</div>;
+  const p = health.data || {};
+
+  return (
+    <div>
+      <div className="glass-2" style={{ padding: "11px 13px", borderLeft: "3px solid var(--cyan)", marginBottom: 20, display: "flex", gap: 10 }}>
+        <Lock size={15} color="var(--cyan)" style={{ flexShrink: 0, marginTop: 1 }} />
+        <div>
+          <div style={{ fontSize: 12.5, fontWeight: 600 }}>🔒 Información confidencial</div>
+          <div className="muted" style={{ fontSize: 11, marginTop: 2, lineHeight: 1.5 }}>
+            Solo visible para HR Manager y superior<br />Protegida bajo LFPDPPP Art. 8
+          </div>
+        </div>
+      </div>
+
+      <Eyebrow>Datos médicos básicos</Eyebrow>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, margin: "9px 0 20px" }}>
+        <div>
+          <label className="fld">Tipo de sangre</label>
+          <select className="select" value={p.tipo_sangre || ""} onChange={(ev) => save({ tipoSangre: ev.target.value || null })}>
+            <option value="">Sin especificar</option>
+            {TIPOS_SANGRE.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="fld">Fecha último examen</label>
+          <input className="input" type="date" defaultValue={p.fecha_ultimo_examen ? String(p.fecha_ultimo_examen).slice(0, 10) : ""}
+            onBlur={(ev) => save({ fechaUltimoExamen: ev.target.value || null })} />
+        </div>
+      </div>
+
+      <Eyebrow>Condiciones declaradas</Eyebrow>
+      <div style={{ margin: "9px 0 20px" }}>
+        <TagInput tags={p.condiciones_declaradas || []} onChange={(tags) => save({ condicionesDeclaradas: tags })} placeholder="Diabetes tipo 2, Hipertensión, Asma…" />
+      </div>
+
+      <Eyebrow>Alergias</Eyebrow>
+      <div style={{ margin: "9px 0 20px" }}>
+        <TagInput tags={p.alergias || []} onChange={(tags) => save({ alergias: tags })} placeholder="Penicilina, Polen, Látex…" />
+      </div>
+
+      <Eyebrow>Medicamentos actuales</Eyebrow>
+      <div style={{ margin: "9px 0 20px" }}>
+        <TagInput tags={p.medicamentos || []} onChange={(tags) => save({ medicamentos: tags })} placeholder="Metformina 500mg, Losartán 50mg…" />
+      </div>
+
+      <Eyebrow>Contacto de emergencia</Eyebrow>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, margin: "9px 0 20px" }}>
+        <div>
+          <label className="fld">Nombre</label>
+          <InlineEditField value={p.contacto_emergencia_nombre} placeholder="Nombre completo" onSave={(v) => save({ contactoEmergenciaNombre: v })} />
+        </div>
+        <div>
+          <label className="fld">Teléfono</label>
+          <InlineEditField value={p.contacto_emergencia_telefono} placeholder="10 dígitos" onSave={(v) => save({ contactoEmergenciaTelefono: v })} />
+        </div>
+        <div>
+          <label className="fld">Relación</label>
+          <InlineEditField value={p.contacto_emergencia_relacion} placeholder="Esposo(a), madre…" onSave={(v) => save({ contactoEmergenciaRelacion: v })} />
+        </div>
+      </div>
+
+      <Eyebrow>Documentos médicos</Eyebrow>
+      <div style={{ margin: "9px 0 20px" }}>
+        <MiniDropzone
+          accept=".pdf,.jpg,.jpeg,.png" multiple busy={uploading} onFiles={onDropFiles}
+          label="Arrastra estudios, análisis o documentos médicos" busyLabel="Subiendo…"
+        />
+        {(p.documentos || []).length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            {p.documentos.map((doc) => <HealthDocRow key={doc.id} doc={doc} token={token} employeeId={e.dbId} onDeleted={health.reload} />)}
+          </div>
+        )}
+      </div>
+
+      <Eyebrow>Notas médicas</Eyebrow>
+      <textarea
+        className="input" rows={4} style={{ resize: "vertical", marginTop: 9 }}
+        placeholder="Observaciones del área de RH…" defaultValue={p.notas_medicas || ""}
+        onBlur={(ev) => { if ((ev.target.value || null) !== (p.notas_medicas || null)) save({ notasMedicas: ev.target.value || null }); }}
+      />
+    </div>
+  );
+}
+
 function ProfileDrawer({ e, onClose, setStatus, update, token, initialTab }) {
   const [tab, setTab] = useState(initialTab || "resumen");
   return (
@@ -938,9 +1232,11 @@ function ProfileDrawer({ e, onClose, setStatus, update, token, initialTab }) {
         </div>
         <div className="row" style={{ gap: 6, marginBottom: 18 }}>
           <span className={`tabbtn ${tab === "resumen" ? "on" : ""}`} onClick={() => setTab("resumen")}>Resumen</span>
+          <span className={`tabbtn ${tab === "salud" ? "on" : ""}`} onClick={() => setTab("salud")}><FileHeart size={12} />Salud</span>
           <span className={`tabbtn ${tab === "nomina" ? "on" : ""}`} onClick={() => setTab("nomina")}><DollarSign size={12} />Nómina</span>
         </div>
         {tab === "resumen" && <ResumenTab e={e} setStatus={setStatus} update={update} />}
+        {tab === "salud" && <SaludTab e={e} token={token} />}
         {tab === "nomina" && <NominaTab e={e} token={token} />}
       </div></>
   );
@@ -1191,7 +1487,7 @@ const PAYROLL_FIELD_KEYS = new Set(CODICE_PAYROLL_FIELDS.map(([f]) => f));
 
 const MODO_A_STEPS = ["Sistema", "Archivo", "Mapeo", "Vista previa", "Progreso", "Resultado"];
 
-function MiniDropzone({ accept, multiple, onFiles, busy }) {
+function MiniDropzone({ accept, multiple, onFiles, busy, label, busyLabel }) {
   const ref = useRef(null);
   const [dragOver, setDragOver] = useState(false);
   return (
@@ -1210,8 +1506,8 @@ function MiniDropzone({ accept, multiple, onFiles, busy }) {
       <input ref={ref} type="file" accept={accept} multiple={multiple} style={{ display: "none" }}
         onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }} />
       {busy
-        ? <><RefreshCw size={16} className="muted" /><span className="muted" style={{ fontSize: 12.5 }}>Analizando archivo…</span></>
-        : <><Upload size={16} className="muted2" /><span className="muted" style={{ fontSize: 12.5 }}>Arrastra el archivo aquí o haz clic para buscar</span></>}
+        ? <><RefreshCw size={16} className="muted" /><span className="muted" style={{ fontSize: 12.5 }}>{busyLabel || "Analizando archivo…"}</span></>
+        : <><Upload size={16} className="muted2" /><span className="muted" style={{ fontSize: 12.5 }}>{label || "Arrastra el archivo aquí o haz clic para buscar"}</span></>}
     </div>
   );
 }
@@ -2824,6 +3120,8 @@ export default function App() {
   const [expedienteEmp, setExpedienteEmp] = useState(null);
   const [expedienteTab, setExpedienteTab] = useState("resumen");
   const openExpediente = useCallback((e, tab) => { if (e) { setExpedienteEmp(e); setExpedienteTab(tab || "resumen"); } }, []);
+  const [plantillaFilter, setPlantillaFilter] = useState(null);
+  const goToPlantillaStatus = useCallback((status) => { setPlantillaFilter(status); setView("plantilla"); }, []);
   useEffect(() => { _toast = (msg, kind = "ok") => { const id = Math.random(); setToasts((t) => [...t, { id, msg, kind }]); setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 2600); }; }, []);
 
   const loadFromApi = useCallback(async () => {
@@ -2923,8 +3221,8 @@ export default function App() {
           <button className="btn" style={{ justifyContent: "center" }} onClick={() => loadFromApi().then(() => toast("Datos sincronizados"))}><RefreshCw size={14} />Sincronizar</button>
         </aside>
         <main style={{ flex: 1, padding: "20px 26px 40px", minWidth: 0, overflowX: "hidden" }}>
-          {view === "cockpit" && <Cockpit staff={staff} solicitudes={solicitudes} resolver={resolver} go={setView} attendance={attendance} openExpediente={openExpediente} token={token} />}
-          {view === "plantilla" && <Plantilla staff={staff} token={token} openExpediente={openExpediente} socket={socket} refreshStaff={refreshStaff} />}
+          {view === "cockpit" && <Cockpit staff={staff} solicitudes={solicitudes} resolver={resolver} go={setView} attendance={attendance} openExpediente={openExpediente} token={token} onFilterPlantillaStatus={goToPlantillaStatus} />}
+          {view === "plantilla" && <Plantilla staff={staff} token={token} openExpediente={openExpediente} socket={socket} refreshStaff={refreshStaff} initialStatusFilter={plantillaFilter} />}
           {view === "solicitudes" && <Solicitudes solicitudes={solicitudes} resueltas={resueltas} resolver={resolver} />}
           {view === "indicadores" && <IndicadoresWKF staff={staff} token={token} />}
           {view === "conectores" && <Conectores token={token} socket={socket} tenantId={tenantId} />}

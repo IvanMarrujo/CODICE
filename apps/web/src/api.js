@@ -261,6 +261,59 @@ export function bulkDeleteEmployees(token) {
   return authedFetchJSON(token, `/api/employees/bulk`, "DELETE");
 }
 
+export function fetchEmployeeStatusSummary(token) {
+  return authedFetch(token, `/api/employees/status-summary`);
+}
+
+// ── Perfil de salud del colaborador ────────────────────────────
+
+export function fetchEmployeeHealth(token, employeeId) {
+  return authedFetch(token, `/api/employees/${employeeId}/health`);
+}
+
+export function updateEmployeeHealth(token, employeeId, payload) {
+  return authedFetchJSON(token, `/api/employees/${employeeId}/health`, "PATCH", payload);
+}
+
+export function deleteHealthDocument(token, employeeId, docId) {
+  return authedFetchJSON(token, `/api/employees/${employeeId}/health/documents/${docId}`, "DELETE");
+}
+
+// Sube un documento médico (multipart) con progreso real vía XHR.
+export function uploadHealthDocument(token, employeeId, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append("file", file);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE}/api/employees/${employeeId}/health/documents`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch { /* respuesta no-JSON */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body.error || `Error al subir documento (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error("Error de red al subir documento"));
+    xhr.send(form);
+  });
+}
+
+export async function downloadHealthDocument(token, employeeId, docId, filename) {
+  const res = await fetch(`${API_BASE}/api/employees/${employeeId}/health/documents/${docId}/download`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Error al descargar documento (${res.status})`);
+  }
+  const blob = await res.blob();
+  return { blob, filename };
+}
+
 // ── Recibos de nómina — eliminación ────────────────────────────
 
 export function deletePayrollRecord(token, id) {

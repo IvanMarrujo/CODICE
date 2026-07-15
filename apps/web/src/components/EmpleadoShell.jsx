@@ -27,7 +27,12 @@ const empToast = (msg, kind = "info") => _empToast(msg, kind);
 // dev de escritorio, la IP de red al abrir desde un teléfono) — "localhost"
 // fijo resolvería al propio teléfono, no a esta máquina.
 const API_BASE = import.meta.env.VITE_API_URL || `${window.location.protocol}//${window.location.hostname}:3001`;
-const AUTH = { slug: "gfp", email: "admin@gfp.mx", password: "ROTATED_SEE_ENV_VAR" };
+// Puente de login demo (ver loginFlow más abajo) — mismas env vars que App.jsx.
+const AUTH = {
+  slug: "gfp",
+  email: import.meta.env.VITE_ADMIN_EMAIL || "admin@gfp.mx",
+  password: import.meta.env.VITE_ADMIN_PASSWORD || "",
+};
 const DEMO_PASSWORD = "1234";
 
 async function apiAuthLogin(payload) {

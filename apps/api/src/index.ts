@@ -20,6 +20,7 @@ import { errorHandler }     from './middleware/errorHandler'
 import authRoutes       from './routes/auth'
 import lftRoutes        from './routes/lft'
 import employeeRoutes   from './routes/employees'
+import healthRoutes     from './routes/health'
 import contractRoutes   from './routes/contracts'
 import payrollRoutes    from './routes/payroll'
 import requestRoutes    from './routes/requests'
@@ -96,6 +97,7 @@ app.use('/api',
 )
 
 app.use('/api/employees',  employeeRoutes)
+app.use('/api/employees',  healthRoutes)
 app.use('/api/contracts',  contractRoutes)
 app.use('/api/payroll',    payrollRoutes)
 app.use('/api/requests',   requestRoutes)

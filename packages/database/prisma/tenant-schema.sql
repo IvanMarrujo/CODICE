@@ -487,6 +487,35 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.connected_sources (
 
 CREATE INDEX idx_connected_sources_tenant ON {SCHEMA}.connected_sources (tenant_id);
 
+-- ─── HEALTH PROFILES (perfil de salud del colaborador) ────────
+-- Confidencial — LFPDPPP Art. 8. Solo accesible vía requireHR.
+
+CREATE TABLE IF NOT EXISTS {SCHEMA}.health_profiles (
+  id                    TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  tenant_id             TEXT        NOT NULL,
+  employee_id           TEXT        REFERENCES {SCHEMA}.employees(id) ON DELETE CASCADE,
+
+  tipo_sangre           TEXT,                    -- A+ | A- | B+ | B- | AB+ | AB- | O+ | O-
+  alergias              JSONB       DEFAULT '[]',
+  condiciones_declaradas JSONB      DEFAULT '[]',
+  medicamentos          JSONB       DEFAULT '[]',
+
+  contacto_emergencia_nombre    TEXT,
+  contacto_emergencia_telefono  TEXT,
+  contacto_emergencia_relacion  TEXT,
+
+  fecha_ultimo_examen   DATE,
+  notas_medicas         TEXT,
+  documentos            JSONB       DEFAULT '[]',  -- [{ id, filename, key, size, mimeType, uploadedAt, uploadedBy }]
+
+  created_at            TIMESTAMPTZ DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ DEFAULT NOW(),
+
+  CONSTRAINT uq_health_profile UNIQUE (tenant_id, employee_id)
+);
+
+CREATE INDEX idx_health_profiles_emp ON {SCHEMA}.health_profiles (employee_id);
+
 -- ─── TENANT AUDIT LOG (per-tenant) ───────────────────────────
 
 CREATE TABLE IF NOT EXISTS {SCHEMA}.audit_log (
@@ -525,7 +554,7 @@ BEGIN
   FOREACH t IN ARRAY ARRAY[
     'employees','contracts','payroll_records','time_off',
     'requests','attendance_records','actas','courses','course_progress',
-    'bonuses','signage_slides','connected_sources'
+    'bonuses','signage_slides','connected_sources','health_profiles'
   ]
   LOOP
     EXECUTE format(

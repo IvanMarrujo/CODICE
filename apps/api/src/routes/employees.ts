@@ -76,7 +76,7 @@ const COLUMN_MAP: Record<string, string> = {
 
 // ── Helpers ───────────────────────────────────────────────────
 
-async function insertAuditLog(
+export async function insertAuditLog(
   tenantDb: any,
   tenantId: string,
   req: Request,
@@ -95,7 +95,7 @@ function emitEmployeeUpdated(req: Request, tenantId: string, employee: unknown) 
   io?.to(`tenant:${tenantId}`).emit('employee:updated', employee)
 }
 
-async function findEmployeeOr404(tenantDb: any, tenantId: string, id: string) {
+export async function findEmployeeOr404(tenantDb: any, tenantId: string, id: string) {
   const rows = await tenantDb.$queryRaw<any[]>`
     SELECT * FROM employees WHERE id = ${id} AND tenant_id = ${tenantId} LIMIT 1
   `
@@ -141,6 +141,40 @@ router.get('/', requireHR, async (req: Request, res: Response, next: NextFunctio
     ])
 
     res.json({ data, total: totalRows[0]?.count ?? 0, page, pageSize })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── GET /api/employees/status-summary ─────────────────────────
+// Conteo por status para el donut de "Status de plantilla" en el Cockpit.
+// Debe registrarse ANTES de '/:id' — si no, Express matchea
+// "/status-summary" contra el parámetro :id.
+
+const KNOWN_STATUSES = [
+  'Activo', 'Vacaciones', 'Incapacidad', 'Permiso',
+  'Baja pendiente', 'Periodo de prueba', 'Baja',
+]
+
+router.get('/status-summary', requireHR, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tenantId = req.tenant.id
+    const tenantDb = req.tenantDb
+
+    const rows = await tenantDb.$queryRaw<{ status: string; count: number }[]>`
+      SELECT status, COUNT(*)::int AS count FROM employees WHERE tenant_id = ${tenantId} GROUP BY status
+    `
+
+    const summary: Record<string, number> = {}
+    for (const s of KNOWN_STATUSES) summary[s] = 0
+    let total = 0
+    for (const row of rows) {
+      summary[row.status] = (summary[row.status] ?? 0) + row.count
+      total += row.count
+    }
+    summary.total = total
+
+    res.json(summary)
   } catch (err) {
     next(err)
   }

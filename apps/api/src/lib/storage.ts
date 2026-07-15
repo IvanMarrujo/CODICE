@@ -4,7 +4,7 @@
 // credenciales reales), escribe el archivo en el tmp local.
 // ============================================================
 
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3'
 import * as fs   from 'fs'
 import * as os   from 'os'
 import * as path from 'path'
@@ -54,4 +54,46 @@ export async function savePdf(key: string, buffer: Buffer): Promise<string> {
   const filePath = path.join(dir, key.replace(/\//g, '_'))
   fs.writeFileSync(filePath, buffer)
   return filePath
+}
+
+// ── Archivos genéricos (PDF/imagen) — usado por documentos médicos ──────
+// A diferencia de savePdf, no arma la URL pública: el caller decide cómo
+// exponer el archivo (acá se sirve vía una ruta autenticada propia, no un
+// link público — son documentos confidenciales, LFPDPPP Art. 8).
+
+function localFilePath(key: string, bucketSuffix: string): string {
+  const dir = path.join(os.tmpdir(), 'codice-files', bucketSuffix, path.dirname(key))
+  return path.join(dir, path.basename(key))
+}
+
+export async function saveFile(key: string, buffer: Buffer, contentType: string, bucketSuffix = 'files'): Promise<void> {
+  if (r2Configured()) {
+    const bucket = `${process.env.R2_BUCKET_PREFIX || 'codice-dev'}-${bucketSuffix}`
+    await getS3().send(new PutObjectCommand({
+      Bucket: bucket, Key: key, Body: buffer, ContentType: contentType,
+    }))
+    return
+  }
+  const filePath = localFilePath(key, bucketSuffix)
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  fs.writeFileSync(filePath, buffer)
+}
+
+export async function readFile(key: string, bucketSuffix = 'files'): Promise<{ buffer: Buffer; contentType?: string }> {
+  if (r2Configured()) {
+    const bucket = `${process.env.R2_BUCKET_PREFIX || 'codice-dev'}-${bucketSuffix}`
+    const obj = await getS3().send(new GetObjectCommand({ Bucket: bucket, Key: key }))
+    const buffer = Buffer.from(await obj.Body!.transformToByteArray())
+    return { buffer, contentType: obj.ContentType }
+  }
+  return { buffer: fs.readFileSync(localFilePath(key, bucketSuffix)) }
+}
+
+export async function deleteFile(key: string, bucketSuffix = 'files'): Promise<void> {
+  if (r2Configured()) {
+    const bucket = `${process.env.R2_BUCKET_PREFIX || 'codice-dev'}-${bucketSuffix}`
+    await getS3().send(new DeleteObjectCommand({ Bucket: bucket, Key: key })).catch(() => {})
+    return
+  }
+  fs.rmSync(localFilePath(key, bucketSuffix), { force: true })
 }
