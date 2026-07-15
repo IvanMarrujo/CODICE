@@ -9,6 +9,7 @@ import { Router, Request, Response, NextFunction } from 'express'
 import { z } from 'zod'
 import { requireManager, requireEmployee } from '../middleware/auth'
 import { AppError } from '../lib/errors'
+import { notifyHR } from '../lib/whatsapp'
 
 const router = Router()
 
@@ -74,6 +75,17 @@ const REQUEST_TYPE_LABEL: Record<string, string> = {
 
 function requestLabel(type: string) {
   return REQUEST_TYPE_LABEL[type] || `tu solicitud (${type})`
+}
+
+function folioFor(requestId: string): string {
+  return requestId.slice(0, 8).toUpperCase()
+}
+
+async function employeeFullName(tenantDb: any, tenantId: string, employeeId: string): Promise<string> {
+  const rows = await tenantDb.$queryRaw<{ full_name: string }[]>`
+    SELECT full_name FROM employees WHERE id = ${employeeId} AND tenant_id = ${tenantId} LIMIT 1
+  `
+  return rows[0]?.full_name || 'Colaborador'
 }
 
 // ── POST /api/requests ────────────────────────────────────────
@@ -190,6 +202,12 @@ router.patch('/:id/approve', requireManager, async (req: Request, res: Response,
     )
     emitRequestUpdated(req, tenantId, request)
 
+    if (notifType === 'REQUEST_APPROVED') {
+      employeeFullName(tenantDb, tenantId, request.employee_id).then((fullName) => {
+        notifyHR(tenantId, 'solicitudes', `✅ CÓDICE · Solicitud aprobada\n👤 ${fullName}\n📋 ${request.type} · Folio: ${folioFor(request.id)}`)
+      }) // fire-and-forget — nunca await (ver PART 3)
+    }
+
     res.json(request)
   } catch (err) {
     next(err)
@@ -230,6 +248,10 @@ router.patch('/:id/reject', requireManager, async (req: Request, res: Response, 
       'Tu solicitud fue rechazada', `Actualización sobre ${requestLabel(request.type)}.`
     )
     emitRequestUpdated(req, tenantId, request)
+
+    employeeFullName(tenantDb, tenantId, request.employee_id).then((fullName) => {
+      notifyHR(tenantId, 'solicitudes', `❌ CÓDICE · Solicitud rechazada\n👤 ${fullName}\n📋 ${request.type} · Folio: ${folioFor(request.id)}`)
+    }) // fire-and-forget — nunca await (ver PART 3)
 
     res.json(request)
   } catch (err) {

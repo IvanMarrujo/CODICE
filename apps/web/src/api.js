@@ -337,6 +337,34 @@ function yearsSince(dateStr) {
   return Math.max(0, years);
 }
 
+// ── Perfil de admin (número de WhatsApp) ───────────────────────
+
+export function fetchAdminProfile(token) {
+  return authedFetch(token, `/api/admin/profile`);
+}
+
+export function updateAdminProfile(token, payload) {
+  return authedFetchJSON(token, `/api/admin/profile`, "PATCH", payload);
+}
+
+// ── Configuración de WhatsApp (conexión + notificaciones) ──────
+
+export function fetchWhatsAppSettings(token) {
+  return authedFetch(token, `/api/settings/whatsapp`);
+}
+
+export function updateWhatsAppSettings(token, payload) {
+  return authedFetchJSON(token, `/api/settings/whatsapp`, "PATCH", payload);
+}
+
+export function fetchWhatsAppMockLog(token) {
+  return authedFetch(token, `/api/settings/whatsapp/mock-log`);
+}
+
+export function simulateWhatsAppAgent(token, message) {
+  return authedFetchJSON(token, `/api/webhook/whatsapp/simulate`, "POST", { message });
+}
+
 export function mapEmployee(row) {
   return {
     id: row.employee_code || row.id,

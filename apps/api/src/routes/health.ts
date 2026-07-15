@@ -18,6 +18,7 @@ import { saveFile, readFile, deleteFile } from '../lib/storage'
 import { findEmployeeOr404, insertAuditLog } from './employees'
 import { redis } from '../lib/redis'
 import { getIO } from '../lib/syncEmitter'
+import { notifyHR } from '../lib/whatsapp'
 
 const router = Router()
 
@@ -142,6 +143,13 @@ async function analyzeHealthDocument(opts: {
       getIO()?.to(`tenant:${tenantId}`).emit('health:alert', {
         employeeId, docId, filename, urgentes: urgentes.length, tipo: parsed.tipo,
       })
+
+      const nameRows = await tenantDb.$queryRaw<{ full_name: string }[]>`
+        SELECT full_name FROM employees WHERE id = ${employeeId} AND tenant_id = ${tenantId} LIMIT 1
+      `
+      const fullName = nameRows[0]?.full_name || 'Colaborador'
+      notifyHR(tenantId, 'salud', `🔴 CÓDICE · Alerta de salud\n👤 ${fullName}\nHallazgo urgente en documento médico.`)
+      // fire-and-forget — nunca await (ver PART 3)
     }
   } catch (err: any) {
     console.error(`❌  Análisis de IA falló para documento ${docId}:`, err.message)

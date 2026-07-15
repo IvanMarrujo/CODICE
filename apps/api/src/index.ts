@@ -36,6 +36,9 @@ import auspexRoutes     from './routes/auspex'    // master cockpit (Auspex)
 import { startAutoSyncWorker } from './jobs/autoSyncQueue'
 import { setIO } from './lib/syncEmitter'
 import webhookRoutes from './routes/webhook'
+import whatsappWebhookRoutes from './routes/whatsappWebhook'
+import settingsRoutes from './routes/settings'
+import { startDailyCourseDigest } from './jobs/dailyCourseDigest'
 
 const PORT = process.env.API_PORT || 3001
 
@@ -87,6 +90,9 @@ app.get('/health', (_, res) => {
 app.use('/api/auth', authRoutes)
 app.use('/api/lft',  lftRoutes)   // calculadoras LFT — puras, sin DB ni auth
 app.use('/api/webhook', webhookRoutes) // el agente se autentica con HMAC propio, no JWT
+// El mensaje entrante de WhatsApp no trae un JWT nuestro; /whatsapp/simulate
+// (mismo router) aplica requireHR internamente sobre esa única ruta.
+app.use('/api/webhook', whatsappWebhookRoutes)
 
 // ── Authenticated routes ─────────────────────────────────────
 // Orden: rateLimiter → JWT auth → tenant resolver → route handler
@@ -109,6 +115,7 @@ app.use('/api/signage',    signageRoutes)
 app.use('/api/notifications', notificationRoutes)
 app.use('/api/attendance', attendanceRoutes)
 app.use('/api/admin',      adminRoutes)
+app.use('/api/settings',   settingsRoutes)
 
 // Auspex (solo SUPER_ADMIN)
 app.use('/api/auspex', auspexRoutes)
@@ -130,6 +137,9 @@ io.on('connection', (socket) => {
 
 // ── Auto-sync (BullMQ, in-process) ──────────────────────────
 startAutoSyncWorker(io, runReloadForSource)
+
+// ── Digest diario 8am — cursos obligatorios pendientes ───────
+startDailyCourseDigest()
 
 // ── Start ────────────────────────────────────────────────────
 server.listen(PORT, () => {

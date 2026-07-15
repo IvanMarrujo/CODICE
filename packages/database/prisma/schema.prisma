@@ -117,6 +117,7 @@ model AdminUser {
   passwordHash String
   firstName    String
   lastName     String
+  phone        String?
   role         AdminRole @default(HR_MANAGER)
 
   // 2FA (fase 2)

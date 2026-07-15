@@ -13,6 +13,7 @@ import type { Server } from 'socket.io'
 import { redis } from './redis'
 import { autoSyncQueue } from '../jobs/autoSyncQueue'
 import type { SyncResult } from '../routes/connectors'
+import { notifyHR } from './whatsapp'
 
 let ioInstance: Server | null = null
 
@@ -71,4 +72,11 @@ export async function emitSyncComplete(tenantId: string, result: SyncResult): Pr
 
   // 3. Headcount / widgets agregados del admin.
   io?.to(`tenant:${tenantId}`).emit('headcount:refresh', {})
+
+  // 4. WhatsApp al HR Manager — solo si de verdad se tocaron recibos.
+  if (result.updated > 0) {
+    const period = result.changedEmployees?.[0]?.period || 'período actual'
+    notifyHR(tenantId, 'nomina', `💰 CÓDICE · Nómina sincronizada\n✅ ${result.processed} recibos actualizados\nPeríodo: ${period}`)
+    // fire-and-forget — nunca await (ver PART 3)
+  }
 }

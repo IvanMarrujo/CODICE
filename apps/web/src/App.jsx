@@ -10,7 +10,7 @@ import {
   ShieldCheck, CalendarDays, FileText, RefreshCw, Check, Inbox, Factory,
   GraduationCap, Monitor, Activity, Award, Maximize, ChevronLeft, Megaphone,
   TrendingUp, ClipboardCheck, UserCheck, Zap, Plug, MapPin, QrCode, DollarSign, Upload,
-  Pause, Play, Trash2, Unplug, Pencil, CheckSquare, Square, Lock, FileHeart,
+  Pause, Play, Trash2, Unplug, Pencil, CheckSquare, Square, Lock, FileHeart, MessageSquare, Copy,
 } from "lucide-react";
 import { io } from "socket.io-client";
 import {
@@ -24,6 +24,8 @@ import {
   deletePayrollRecord, bulkDeletePayrollRecords,
   fetchEmployeeStatusSummary, fetchEmployeeHealth, updateEmployeeHealth,
   uploadHealthDocument, deleteHealthDocument, downloadHealthDocument, fetchHealthDocumentInsights,
+  fetchAdminProfile, updateAdminProfile,
+  fetchWhatsAppSettings, updateWhatsAppSettings, fetchWhatsAppMockLog, simulateWhatsAppAgent,
 } from "./api.js";
 
 // Credenciales de auto-login del cockpit admin (tenant único GFP). Vienen de
@@ -2291,6 +2293,267 @@ function ConnectedSourcesPanel({ token, socket, refreshKey, onChanged, tenantId 
   );
 }
 
+/* ============================================================
+   WHATSAPP — notificaciones + agente consultivo
+   ============================================================ */
+
+const WHATSAPP_QUERY_EXAMPLES = [
+  "¿Cuántos empleados activos tengo?",
+  "¿Quién faltó hoy?",
+  "¿Cuánto me cuesta la nómina?",
+  "¿Qué solicitudes tengo pendientes?",
+  "¿Hay contratos por vencer?",
+  "¿Cuántos incapacitados?",
+  "¿Quién tiene cursos vencidos?",
+];
+
+const WHATSAPP_NOTIF_LABELS = [
+  ["solicitudes",  "Solicitudes aprobadas o rechazadas"],
+  ["nomina",       "Nómina sincronizada"],
+  ["salud",        "Alertas de salud"],
+  ["capacitacion", "Cursos obligatorios pendientes"],
+];
+
+function WhatsAppConnectionCard({ settings, onSaved }) {
+  const [instanceId, setInstanceId] = useState("");
+  const [tokenInput, setTokenInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const webhookUrl = `${import.meta.env.VITE_API_URL || "http://localhost:3001"}/api/webhook/whatsapp`;
+
+  const copyUrl = () => {
+    navigator.clipboard?.writeText(webhookUrl);
+    toast("URL copiada");
+  };
+
+  const activar = async () => {
+    if (!instanceId.trim() || !tokenInput.trim()) return;
+    setBusy(true);
+    try {
+      await onSaved({ instanceId: instanceId.trim(), token: tokenInput.trim() });
+      setInstanceId(""); setTokenInput("");
+      toast("Conexión activada");
+    } catch (err) {
+      toast(err.message, "no");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="glass" style={{ padding: 18, marginBottom: 20 }}>
+      <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>Notificaciones WhatsApp</div>
+      <div className="row" style={{ gap: 7, marginBottom: 16 }}>
+        <span className="dot live" style={{ background: settings.connected ? "var(--emerald)" : "var(--muted-2)" }} />
+        <span style={{ fontSize: 12.5 }}>{settings.connected ? "Conexión activa · Verificada" : "Sin conexión activa"}</span>
+      </div>
+
+      <label className="fld">URL de integración</label>
+      <div className="row glass-2" style={{ padding: "8px 10px", marginBottom: 14, gap: 8 }}>
+        <span className="mono" style={{ fontSize: 11.5, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{webhookUrl}</span>
+        <button className="btn btn-sm" onClick={copyUrl}><Copy size={11} />Copiar</button>
+      </div>
+
+      <div className="row" style={{ gap: 10, marginBottom: 14 }}>
+        <div style={{ flex: 1 }}>
+          <label className="fld">Clave de instancia</label>
+          <input className="input" value={instanceId} onChange={(e) => setInstanceId(e.target.value)} placeholder={settings.instanceIdMasked || "Clave de instancia"} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <label className="fld">Token de acceso</label>
+          <input className="input" type="password" value={tokenInput} onChange={(e) => setTokenInput(e.target.value)} placeholder="Token de acceso" />
+        </div>
+      </div>
+      <button className="btn btn-accent" disabled={!instanceId.trim() || !tokenInput.trim() || busy} onClick={activar}>
+        {busy ? "Activando…" : "Activar conexión"}
+      </button>
+    </div>
+  );
+}
+
+function WhatsAppPhoneCard({ profile, onSaved }) {
+  const [phone, setPhone] = useState((profile.phone || "").replace(/^\+?52/, ""));
+  const [busy, setBusy] = useState(false);
+
+  const guardar = async () => {
+    const digits = phone.replace(/\D/g, "");
+    if (digits.length < 10) return;
+    setBusy(true);
+    try {
+      await onSaved(`+52${digits}`);
+      toast("Número guardado");
+    } catch (err) {
+      toast(err.message, "no");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="glass" style={{ padding: 18, marginBottom: 20 }}>
+      <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>Mi número de WhatsApp</div>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>Las notificaciones llegarán a este número</div>
+      <div className="row" style={{ gap: 8, marginBottom: 12 }}>
+        <span className="glass-2" style={{ padding: "9px 12px", fontSize: 13 }}>+52</span>
+        <input className="input" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="10 dígitos" style={{ flex: 1 }} />
+      </div>
+      <button className="btn btn-accent" disabled={phone.replace(/\D/g, "").length < 10 || busy} onClick={guardar}>
+        {busy ? "Guardando…" : "Guardar"}
+      </button>
+    </div>
+  );
+}
+
+function WhatsAppNotificationsCard({ settings, onToggle }) {
+  return (
+    <div className="glass" style={{ padding: 18, marginBottom: 20 }}>
+      <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 12 }}>Notificaciones activas</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {WHATSAPP_NOTIF_LABELS.map(([key, label]) => (
+          <label key={key} className="row" style={{ gap: 9, fontSize: 13, cursor: "pointer" }}>
+            <input type="checkbox" checked={!!settings.settings?.[key]} onChange={(e) => onToggle(key, e.target.checked)} />
+            {label}
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function WhatsAppAgentTestCard({ token }) {
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+
+  const probar = async () => {
+    if (!message.trim() || busy) return;
+    setBusy(true); setError(null); setResult(null);
+    try {
+      const res = await simulateWhatsAppAgent(token, message.trim());
+      setResult(res);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="glass" style={{ padding: 18, marginBottom: 20 }}>
+      <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>Consulta tu plantilla por WhatsApp</div>
+      <div className="muted" style={{ fontSize: 12.5, marginBottom: 14, lineHeight: 1.5 }}>
+        Cuando la conexión esté activa, envía un mensaje de WhatsApp y el agente responderá con datos reales de tu sistema.
+      </div>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 14 }}>
+        {WHATSAPP_QUERY_EXAMPLES.map((q) => (
+          <span key={q} className="chip" style={{ cursor: "pointer" }} onClick={() => setMessage(q)}>{q}</span>
+        ))}
+      </div>
+
+      <div className="row" style={{ gap: 10, marginBottom: 14 }}>
+        <input className="input" value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Escribe una consulta…" style={{ flex: 1 }}
+          onKeyDown={(e) => e.key === "Enter" && probar()} />
+        <button className="btn btn-accent" disabled={!message.trim() || busy} onClick={probar}>
+          {busy ? "Consultando…" : "Probar agente"}
+        </button>
+      </div>
+
+      {error && <div style={{ fontSize: 12.5, color: "var(--rose)", marginBottom: 10 }}>{error}</div>}
+
+      {result && (
+        <>
+          <div className="glass-2" style={{ padding: 14, background: "rgba(79,214,163,.06)", borderColor: "rgba(79,214,163,.25)" }}>
+            <div className="row" style={{ gap: 7, marginBottom: 8 }}>
+              <Bot size={14} color="var(--emerald)" />
+              <span style={{ fontWeight: 600, fontSize: 12.5 }}>Agente CÓDICE</span>
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{result.response}</div>
+            <div style={{ textAlign: "right", marginTop: 8, fontSize: 11, color: "var(--cyan)" }}>✓✓</div>
+          </div>
+          <div className="muted2" style={{ fontSize: 11, marginTop: 8 }}>Consulta: {result.intent}</div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function WhatsAppActivityCard({ token, refreshKey }) {
+  const [state, setState] = useState({ status: "loading", data: [] });
+  useEffect(() => {
+    if (!token) return;
+    fetchWhatsAppMockLog(token)
+      .then(({ data }) => setState({ status: "ready", data: data || [] }))
+      .catch((e) => setState({ status: "error", data: [], error: e.message }));
+  }, [token, refreshKey]);
+
+  return (
+    <div className="glass" style={{ padding: 18 }}>
+      <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>Registro de actividad</div>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 14 }}>Últimas notificaciones enviadas</div>
+      {state.status === "loading" && <div className="muted" style={{ fontSize: 12.5 }}>Cargando…</div>}
+      {state.status === "ready" && state.data.length === 0 && (
+        <div className="muted" style={{ fontSize: 12.5 }}>Sin actividad registrada aún</div>
+      )}
+      {state.data.map((entry, i) => (
+        <div key={i} className="glass-2 row" style={{ padding: "9px 12px", justifyContent: "space-between", gap: 10, marginBottom: 7 }}>
+          <span style={{ fontSize: 12, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.message}</span>
+          <span className="muted2 mono" style={{ fontSize: 10.5, flexShrink: 0 }}>{fmtDateShort(entry.ts)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function WhatsAppPage({ token }) {
+  const [settings, setSettings] = useState({ status: "loading" });
+  const [profile, setProfile] = useState({ status: "loading" });
+  const [logKey, setLogKey] = useState(0);
+
+  const reloadSettings = useCallback(() => {
+    fetchWhatsAppSettings(token).then((data) => setSettings({ status: "ready", ...data })).catch((e) => setSettings({ status: "error", error: e.message }));
+  }, [token]);
+  const reloadProfile = useCallback(() => {
+    fetchAdminProfile(token).then((data) => setProfile({ status: "ready", ...data })).catch((e) => setProfile({ status: "error", error: e.message }));
+  }, [token]);
+
+  useEffect(() => { reloadSettings(); reloadProfile(); }, [reloadSettings, reloadProfile]);
+
+  const saveConnection = async ({ instanceId, token: instanceToken }) => {
+    await updateWhatsAppSettings(token, { instanceId, token: instanceToken });
+    reloadSettings();
+  };
+  const savePhone = async (phone) => {
+    await updateAdminProfile(token, { phone });
+    reloadProfile();
+  };
+  const toggleNotif = async (key, value) => {
+    await updateWhatsAppSettings(token, { settings: { [key]: value } });
+    reloadSettings();
+    setLogKey((k) => k + 1);
+  };
+
+  if (settings.status === "loading" || profile.status === "loading") {
+    return <div className="fadein muted" style={{ fontSize: 13, padding: "20px 0" }}>Cargando…</div>;
+  }
+
+  return (
+    <div className="fadein">
+      <Eyebrow>Integraciones</Eyebrow>
+      <h1 style={{ fontSize: 22, fontWeight: 700, margin: "5px 0 6px" }}>Notificaciones y Agente Consultivo</h1>
+      <div className="muted" style={{ fontSize: 13, marginBottom: 22, maxWidth: 640 }}>
+        Recibe avisos automáticos y consulta tu plantilla directamente desde WhatsApp.
+      </div>
+
+      <WhatsAppConnectionCard settings={settings} onSaved={saveConnection} />
+      <WhatsAppPhoneCard profile={profile} onSaved={savePhone} />
+      <WhatsAppNotificationsCard settings={settings} onToggle={toggleNotif} />
+      <WhatsAppAgentTestCard token={token} />
+      <WhatsAppActivityCard token={token} refreshKey={logKey} />
+    </div>
+  );
+}
+
 function Conectores({ token, socket, tenantId }) {
   const [refreshKey, setRefreshKey] = useState(0);
   const [activeMode, setActiveMode] = useState(null); // null | "A" | "B" | "C"
@@ -3163,7 +3426,7 @@ const NAV = [
   ["_s", "Cumplimiento"],
   ["contratos", "Contratos", FileSignature], ["lft", "Módulo LFT", Scale], ["filtro", "Filtro → Tablero", Filter],
   ["_s", "Integraciones"],
-  ["conectores", "Conectores", Plug],
+  ["conectores", "Conectores", Plug], ["whatsapp", "WhatsApp", MessageSquare],
   ["_s", "Personas"],
   ["capacitacion", "Capacitación", GraduationCap], ["senalizacion", "Señalización", Monitor],
   ["autoservicio", "Autoservicio", MessageSquareText], ["consultor", "Consultor IA", Bot],
@@ -3297,6 +3560,7 @@ export default function App() {
           {view === "solicitudes" && <Solicitudes solicitudes={solicitudes} resueltas={resueltas} resolver={resolver} />}
           {view === "indicadores" && <IndicadoresWKF staff={staff} token={token} />}
           {view === "conectores" && <Conectores token={token} socket={socket} tenantId={tenantId} />}
+          {view === "whatsapp" && <WhatsAppPage token={token} />}
           {view === "asistencia" && <Asistencia staff={staff} attendance={attendance} openExpediente={openExpediente} />}
           {view === "contratos" && <Contratos staff={staff} />}
           {view === "lft" && <LFT />}
