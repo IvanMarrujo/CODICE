@@ -13,6 +13,17 @@ export interface SyncRowError {
   file?:   string
 }
 
+// Diagnóstico de deduplicación por RFC — ver runExcelSync en routes/connectors.ts.
+export interface SyncBreakdown {
+  totalRows:    number
+  validRFC:     number
+  duplicateRFC: number
+  missingRFC:   number
+  inserted:     number
+  updated:      number
+  skipped:      number
+}
+
 /** Crea el SyncLog inicial (status PENDING, según default del schema) — "start". */
 export async function createSyncLog(tenantId: string, source: SyncSource, totalRows: number): Promise<SyncLog> {
   return prismaPublic.syncLog.create({
@@ -31,7 +42,7 @@ export async function markSyncRunning(syncLogId: string): Promise<SyncLog> {
 /** Cierra el SyncLog como completed/partial/failed según el resultado. */
 export async function finishSync(
   syncLogId: string,
-  opts: { processed: number; errors: SyncRowError[]; employeesProcessed?: number; payrollProcessed?: number }
+  opts: { processed: number; errors: SyncRowError[]; employeesProcessed?: number; payrollProcessed?: number; breakdown?: SyncBreakdown }
 ): Promise<SyncLog> {
   const log = await prismaPublic.syncLog.findUniqueOrThrow({ where: { id: syncLogId } })
   const durationMs = Date.now() - log.startedAt.getTime()
@@ -52,6 +63,7 @@ export async function finishSync(
       durationMs,
       employeesProcessed: opts.employeesProcessed,
       payrollProcessed:   opts.payrollProcessed,
+      breakdown:          opts.breakdown as any,
     },
   })
 }

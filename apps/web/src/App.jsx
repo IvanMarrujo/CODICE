@@ -1792,11 +1792,23 @@ function ResultStep({ result, err, isExcel, onClose }) {
     );
   }
   const errs = result?.errors || [];
+  const b = result?.breakdown;
   return (
     <div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
-        <div className="row" style={{ gap: 8 }}><CircleCheck size={16} style={{ color: "var(--emerald)" }} /><span>{result.processed} {isExcel ? "empleados" : "recibos"} sincronizados</span></div>
-        {!isExcel && <div className="row" style={{ gap: 8 }}><CircleCheck size={16} style={{ color: "var(--emerald)" }} /><span>{result.processed} recibos importados</span></div>}
+        {b ? (
+          <>
+            <div className="row" style={{ gap: 8 }}><CircleCheck size={16} style={{ color: "var(--emerald)" }} /><span>{b.totalRows} fila{b.totalRows === 1 ? "" : "s"} procesada{b.totalRows === 1 ? "" : "s"} · {b.inserted} nuevo{b.inserted === 1 ? "" : "s"} · {b.updated} actualizado{b.updated === 1 ? "" : "s"}</span></div>
+            {b.duplicateRFC > 0 && <div className="row" style={{ gap: 8 }}><AlertTriangle size={16} style={{ color: "var(--cyan)" }} /><span>{b.duplicateRFC} fila{b.duplicateRFC === 1 ? "" : "s"} con RFC repetido en el archivo — se combinaron en el mismo empleado</span></div>}
+            {b.missingRFC > 0 && <div className="row" style={{ gap: 8 }}><AlertTriangle size={16} style={{ color: "var(--amber)" }} /><span>{b.missingRFC} fila{b.missingRFC === 1 ? "" : "s"} sin RFC — no se pudieron comparar contra empleados existentes</span></div>}
+            {b.skipped > 0 && <div className="row" style={{ gap: 8 }}><AlertTriangle size={16} style={{ color: "var(--rose)" }} /><span>{b.skipped} fila{b.skipped === 1 ? "" : "s"} omitida{b.skipped === 1 ? "" : "s"} por error</span></div>}
+          </>
+        ) : (
+          <>
+            <div className="row" style={{ gap: 8 }}><CircleCheck size={16} style={{ color: "var(--emerald)" }} /><span>{result.processed} {isExcel ? "empleados" : "recibos"} sincronizados</span></div>
+            {!isExcel && <div className="row" style={{ gap: 8 }}><CircleCheck size={16} style={{ color: "var(--emerald)" }} /><span>{result.processed} recibos importados</span></div>}
+          </>
+        )}
         {errs.length > 0 && <div className="row" style={{ gap: 8 }}><AlertTriangle size={16} style={{ color: "var(--amber)" }} /><span>{errs.length} registro{errs.length === 1 ? "" : "s"} con advertencias</span></div>}
       </div>
       {errs.length > 0 && (

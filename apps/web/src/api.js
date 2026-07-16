@@ -14,7 +14,10 @@ export async function login({ slug, email, password }) {
 }
 
 export async function fetchEmployees(token) {
-  const res = await fetch(`${API_BASE}/api/employees?pageSize=100`, {
+  // pageSize=100 truncaba Plantilla en exactamente 100 empleados sin importar
+  // cuántos existieran realmente — no hay UI de "cargar más" en Plantilla,
+  // así que esto necesita cubrir el tenant completo en un solo fetch.
+  const res = await fetch(`${API_BASE}/api/employees?pageSize=2000`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {

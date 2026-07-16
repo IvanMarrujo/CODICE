@@ -22,7 +22,12 @@ const listQuerySchema = z.object({
   shift:      z.string().optional(),
   search:     z.string().optional(),
   page:       z.coerce.number().int().min(1).default(1),
-  pageSize:   z.coerce.number().int().min(1).max(100).default(20),
+  // Tope subido de 100 -> 2000: con el cap en 100, Plantilla (que pide
+  // pageSize=100 sin paginar) truncaba SIEMPRE en 100 sin importar cuántos
+  // empleados existieran de verdad — un import de 400 (o los que sean)
+  // parecía "perder" empleados cuando en realidad estaban en la DB pero el
+  // fetch nunca los pedía. Ver investigación "IMPORT DEBUG".
+  pageSize:   z.coerce.number().int().min(1).max(2000).default(20),
 })
 
 const employeeInputSchema = z.object({

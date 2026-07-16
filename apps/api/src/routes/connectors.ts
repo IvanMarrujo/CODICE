@@ -25,7 +25,7 @@ import { CANONICAL_FIELD_LABELS }                     from '../connectors/excel/
 import { parseCfdiBuffer }                           from '../connectors/cfdi/cfdiParser'
 import { parseEmpleaDbf, parseNominaDbf }             from '../connectors/dbf/dbfParser'
 import { EmployeeUpsertRow, PayrollUpsertRow }        from '../connectors/common'
-import { createSyncLog, markSyncRunning, finishSync, failSync, SyncRowError } from '../services/syncService'
+import { createSyncLog, markSyncRunning, finishSync, failSync, SyncRowError, SyncBreakdown } from '../services/syncService'
 import { prismaPublic }                              from '../lib/prisma'
 import { registerAutoSync, unregisterAutoSync }       from '../jobs/autoSyncQueue'
 import { emitSyncComplete }                          from '../lib/syncEmitter'
@@ -317,11 +317,35 @@ export interface SyncResult {
   payrollUpserted:   number
   changedEmployees:  ChangedEmployee[]
   syncLogId:         string
+  breakdown?:        SyncBreakdown // solo Excel hoy — ver runExcelSync
 }
 
 interface SourceFile { buffer: Buffer; originalname: string }
 
 // ── runExcelSync ──────────────────────────────────────────────
+
+// Diagnóstico de RFC en el batch ANTES de tocar la DB — responde de raíz a
+// "¿por qué 400 filas terminan en menos de 400 empleados?": si el archivo
+// trae el mismo RFC en varias filas (ej. un export de Nomipaq con una fila
+// por período de pago por empleado), esas filas se COLAPSAN a un solo
+// registro por diseño — cada repetición hace UPDATE, no INSERT, sobre el
+// mismo `id` (ver upsertEmployee: matchea por rfc primero). Esto es
+// deduplicación correcta, no un bug — pero sin este desglose es indistin-
+// guible de una pérdida real de datos, que es exactamente lo que se reportó.
+function computeRfcStats(rows: ParsedEmployeeRow[]): { validRFC: number; duplicateRFC: number; missingRFC: number } {
+  const counts = new Map<string, number>()
+  let missingRFC = 0
+  for (const row of rows) {
+    if (!row.rfc) { missingRFC++; continue }
+    counts.set(row.rfc, (counts.get(row.rfc) ?? 0) + 1)
+  }
+  const validRFC = rows.length - missingRFC
+  // "duplicateRFC" cuenta las filas EXTRA más allá de la primera aparición
+  // de cada RFC repetido — son las que terminan colapsando en un UPDATE.
+  let duplicateRFC = 0
+  for (const count of counts.values()) if (count > 1) duplicateRFC += count - 1
+  return { validRFC, duplicateRFC, missingRFC }
+}
 
 async function runExcelSync(tenantId: string, tenantDb: any, io: any, files: SourceFile[], overrideMap?: Record<string, string>): Promise<SyncResult> {
   const allRows: ParsedEmployeeRow[] = []
@@ -333,8 +357,20 @@ async function runExcelSync(tenantId: string, tenantDb: any, io: any, files: Sou
     for (const e of errors) rowErrors.push({ ...e, file: file.originalname })
   }
 
+  const rfcStats = computeRfcStats(allRows)
+  console.log(
+    `[import] ${files.map(f => f.originalname).join(', ')}: ${allRows.length} filas leídas — ` +
+    `RFC válido: ${rfcStats.validRFC}, RFC duplicado (se colapsan a 1 registro): ${rfcStats.duplicateRFC}, sin RFC: ${rfcStats.missingRFC}`
+  )
+
   // Cada fila cuenta como 1 unidad de progreso si solo trae datos de
   // empleado, o 2 si también trae nómina (upsert de employees + payroll_records).
+  // OJO: esto es un contador de OPERACIONES, no de filas — un archivo de 400
+  // filas donde cada una trae también datos de nómina reporta processed=800
+  // al terminar. No es una relectura del archivo (parseExcelBuffer corre una
+  // sola vez por archivo, arriba) — es la suma de 2 upserts por fila. El
+  // desglose (`breakdown`, devuelto al final) usa allRows.length para el
+  // conteo real de filas, precisamente para no repetir esta confusión en la UI.
   const total = allRows.reduce((sum, row) => sum + (row.payroll ? 2 : 1), 0)
   const syncLog = await createSyncLog(tenantId, 'EXCEL_GENERIC', total)
   await markSyncRunning(syncLog.id)
@@ -383,8 +419,22 @@ async function runExcelSync(tenantId: string, tenantDb: any, io: any, files: Sou
       }
     }
 
-    await finishSync(syncLog.id, { processed, errors: rowErrors, employeesProcessed: employeesUpserted, payrollProcessed: payrollUpserted })
-    return { processed, inserted, updated, errors: rowErrors, employeesUpserted, payrollUpserted, changedEmployees, syncLogId: syncLog.id }
+    const breakdown: SyncBreakdown = {
+      totalRows:    allRows.length,
+      validRFC:     rfcStats.validRFC,
+      duplicateRFC: rfcStats.duplicateRFC,
+      missingRFC:   rfcStats.missingRFC,
+      inserted,
+      updated,
+      skipped:      rowErrors.length,
+    }
+    console.log(
+      `[import] resultado: ${breakdown.totalRows} filas -> ${breakdown.inserted} insertados, ` +
+      `${breakdown.updated} actualizados, ${breakdown.skipped} omitidos por error`
+    )
+
+    await finishSync(syncLog.id, { processed, errors: rowErrors, employeesProcessed: employeesUpserted, payrollProcessed: payrollUpserted, breakdown })
+    return { processed, inserted, updated, errors: rowErrors, employeesUpserted, payrollUpserted, changedEmployees, syncLogId: syncLog.id, breakdown }
   } catch (err: any) {
     await failSync(syncLog.id, err.message)
     throw err
@@ -573,7 +623,10 @@ router.post('/upload/excel', requireHR, handleExcelUpload, async (req: Request, 
     // PART 4 — guarda el mapeo efectivamente usado para la próxima subida.
     if (fieldMap) await saveFieldMap(req.tenant.id, FIELD_MAP_SOURCE_TYPE, fieldMap)
 
-    res.json({ processed: result.processed, inserted: result.inserted, updated: result.updated, errors: result.errors, syncLogId: result.syncLogId })
+    res.json({
+      processed: result.processed, inserted: result.inserted, updated: result.updated,
+      errors: result.errors, syncLogId: result.syncLogId, breakdown: result.breakdown,
+    })
   } catch (err) {
     next(err)
   }

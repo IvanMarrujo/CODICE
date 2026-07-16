@@ -217,6 +217,11 @@ model SyncLog {
   processed  Int        @default(0)
   errors     Int        @default(0)
   errorLog   Json?      // array de errores con detalle
+  // Diagnóstico de deduplicación por RFC — { totalRows, validRFC,
+  // duplicateRFC, missingRFC, inserted, updated, skipped }. Solo lo llena
+  // runExcelSync hoy (ver "IMPORT DEBUG" — investigación de conteos
+  // inconsistentes en imports grandes).
+  breakdown  Json?
 
   // Split de `processed` por tipo de entidad — no todos los conectores
   // tocan ambas tablas (ej: Excel genérico solo toca employees).
