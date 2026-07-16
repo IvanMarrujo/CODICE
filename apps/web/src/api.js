@@ -310,6 +310,16 @@ export function uploadHealthDocument(token, employeeId, file, onProgress) {
   });
 }
 
+// ── Riesgo de salud de la plantilla ────────────────────────────
+
+export function fetchRiskSummary(token) {
+  return authedFetch(token, `/api/employees/risk-summary`);
+}
+
+export function fetchRiskNarrative(token, { refresh = false } = {}) {
+  return authedFetchJSON(token, `/api/employees/risk-summary/narrative${refresh ? "?refresh=true" : ""}`, "POST");
+}
+
 export async function downloadHealthDocument(token, employeeId, docId, filename) {
   const res = await fetch(`${API_BASE}/api/employees/${employeeId}/health/documents/${docId}/download`, {
     headers: { Authorization: `Bearer ${token}` },

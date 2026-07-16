@@ -21,6 +21,7 @@ import authRoutes       from './routes/auth'
 import lftRoutes        from './routes/lft'
 import employeeRoutes   from './routes/employees'
 import healthRoutes     from './routes/health'
+import riskRoutes       from './routes/risk'
 import contractRoutes   from './routes/contracts'
 import payrollRoutes    from './routes/payroll'
 import requestRoutes    from './routes/requests'
@@ -102,6 +103,10 @@ app.use('/api',
   tenantMiddleware,   // setea req.tenant + req.tenantDb (Prisma en schema del tenant)
 )
 
+// riskRoutes debe montarse ANTES que employeeRoutes: "/risk-summary" es un
+// solo segmento y matchearía contra el "/:id" de employeeRoutes si se
+// registra después (mismo gotcha que "/status-summary", ver employees.ts).
+app.use('/api/employees',  riskRoutes)
 app.use('/api/employees',  employeeRoutes)
 app.use('/api/employees',  healthRoutes)
 app.use('/api/contracts',  contractRoutes)

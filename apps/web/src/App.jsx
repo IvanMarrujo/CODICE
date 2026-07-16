@@ -27,6 +27,7 @@ import {
   fetchAdminProfile, updateAdminProfile,
   fetchWhatsAppSettings, updateWhatsAppSettings, fetchWhatsAppMockLog, simulateWhatsAppAgent,
   fetchVacationPolicy, updateVacationPolicy, fetchStorageStatus, downloadNdaPreview,
+  fetchRiskSummary, fetchRiskNarrative,
 } from "./api.js";
 
 // Credenciales de auto-login del cockpit admin (tenant único GFP). Vienen de
@@ -88,6 +89,8 @@ body{font-family:var(--font)}
 @keyframes d1{0%,100%{transform:translate(0,0)}50%{transform:translate(80px,60px)}}
 @keyframes d2{0%,100%{transform:translate(0,0)}50%{transform:translate(-70px,40px)}}
 @keyframes d3{0%,100%{transform:translate(0,0)}50%{transform:translate(50px,-60px)}}
+.spin{animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 .glass{background:var(--glass);backdrop-filter:blur(18px) saturate(140%);-webkit-backdrop-filter:blur(18px) saturate(140%);border:1px solid var(--border);border-radius:18px;box-shadow:0 1px 0 rgba(255,255,255,.05) inset,0 18px 50px -20px rgba(0,0,0,.75)}
 .glass-2{background:var(--glass-2);border:1px solid var(--border);border-radius:14px;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
 .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
@@ -3066,7 +3069,161 @@ function Solicitudes({ solicitudes, resueltas, resolver }) {
 /* ============================================================
    INDICADORES WKF — ausentismo, rotación, incapacidades
    ============================================================ */
-function IndicadoresWKF({ staff, token }) {
+function useRiskSummary(token) {
+  const [state, setState] = useState({ status: "loading", data: null });
+  const reload = useCallback(() => {
+    if (!token) return;
+    setState((s) => ({ ...s, status: "loading" }));
+    fetchRiskSummary(token)
+      .then((data) => setState({ status: "ready", data }))
+      .catch((e) => setState({ status: "error", data: null, error: e.message }));
+  }, [token]);
+  useEffect(() => { reload(); }, [reload]);
+  return { ...state, reload };
+}
+
+const RISK_COLOR = { BAJO: "var(--emerald)", MEDIO: "var(--amber)", ALTO: "var(--rose)" };
+
+function RiskLevelBadge({ level }) {
+  return <span className="chip" style={{ color: RISK_COLOR[level] }}><span className="dot" style={{ background: RISK_COLOR[level] }} />{level}</span>;
+}
+
+function RiskNarrativeCard({ token }) {
+  const [narrative, setNarrative] = useState(null);
+  const [status, setStatus] = useState("loading"); // loading | ready | error | idle
+  const [generatedAt, setGeneratedAt] = useState(null);
+
+  const generate = useCallback((refresh) => {
+    setStatus("loading");
+    fetchRiskNarrative(token, { refresh })
+      .then(({ narrative }) => { setNarrative(narrative); setGeneratedAt(new Date()); setStatus("ready"); })
+      .catch((e) => { setStatus("error"); toast(e.message, "error"); });
+  }, [token]);
+
+  useEffect(() => { if (token) generate(false); }, [token, generate]);
+
+  return (
+    <div className="glass" style={{ padding: 18, marginBottom: 16, border: "1px solid rgba(167,139,250,.28)" }}>
+      <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+        <div className="row" style={{ gap: 8 }}><Bot size={16} style={{ color: "var(--violet)" }} /><span style={{ fontWeight: 600, fontSize: 13.5 }}>Análisis ejecutivo · IA</span></div>
+        <button className="btn btn-sm" disabled={status === "loading"} onClick={() => generate(true)}>
+          <RefreshCw size={12} className={status === "loading" ? "spin" : ""} />Actualizar análisis
+        </button>
+      </div>
+      {status === "loading" && <div className="muted" style={{ fontSize: 13 }}>Generando análisis…</div>}
+      {status === "error" && <div className="muted" style={{ fontSize: 13 }}>No se pudo generar el análisis.</div>}
+      {status === "ready" && (
+        <>
+          <div style={{ fontSize: 13.5, lineHeight: 1.55 }}>{narrative}</div>
+          <div className="muted2" style={{ fontSize: 11, marginTop: 10 }}>Generado {generatedAt ? generatedAt.toLocaleDateString("es-MX") : "hoy"}</div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function RiskAlertsCard({ alerts, staff, openExpediente }) {
+  if (!alerts || alerts.length === 0) return null;
+  return (
+    <div className="glass" style={{ padding: 0, overflow: "hidden", marginBottom: 16, border: "1px solid rgba(245,181,68,.3)" }}>
+      <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)" }} className="row">
+        <AlertTriangle size={15} style={{ color: "var(--amber)" }} />
+        <span style={{ fontWeight: 600, fontSize: 13, marginLeft: 8 }}>⚠️ {alerts.length} colaborador{alerts.length === 1 ? "" : "es"} requiere{alerts.length === 1 ? "" : "n"} atención</span>
+      </div>
+      <div>
+        {alerts.map((a) => (
+          <div key={a.employeeId} className="row" style={{ padding: "10px 16px", borderBottom: "1px solid var(--border)", justifyContent: "space-between", cursor: "pointer" }}
+            onClick={() => openExpediente?.(staff.find((s) => s.dbId === a.employeeId), "salud")}>
+            <div className="row" style={{ gap: 9 }}>
+              <span className="chip" style={{ color: a.urgency === "alta" ? "var(--rose)" : "var(--amber)" }}>{a.urgency === "alta" ? "Urgente" : "Atención"}</span>
+              <span style={{ fontWeight: 500, fontSize: 13 }}>{a.fullName}</span>
+            </div>
+            <span className="muted" style={{ fontSize: 12 }}>{a.message}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RiesgoSalud({ staff, token, openExpediente }) {
+  const { status, data, reload } = useRiskSummary(token);
+  if (status === "loading" && !data) return <div className="muted" style={{ padding: 18 }}>Calculando riesgo de salud…</div>;
+  if (status === "error" || !data) return <div className="muted" style={{ padding: 18 }}>No se pudo cargar el análisis de riesgo.</div>;
+
+  const { summary, byDepartment, topRisk, alerts } = data;
+
+  return (
+    <div style={{ marginTop: 28 }}>
+      <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+        <div>
+          <Eyebrow>Análisis de riesgo de salud</Eyebrow>
+          <h2 style={{ fontSize: 16, fontWeight: 700, margin: "6px 0 4px" }}>ANÁLISIS DE RIESGO DE SALUD</h2>
+          <div className="muted" style={{ fontSize: 12.5, marginBottom: 14 }}>Basado en ausentismo, incapacidades y perfil de salud</div>
+        </div>
+        <button className="btn btn-sm" onClick={reload}><RefreshCw size={12} />Refrescar</button>
+      </div>
+
+      <RiskNarrativeCard token={token} />
+      <RiskAlertsCard alerts={alerts} staff={staff} openExpediente={openExpediente} />
+
+      <div className="row" style={{ gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+        <Stat label="Riesgo bajo" value={summary.bajo} sub={`de ${summary.total} colaboradores`} accent="var(--emerald)" />
+        <Stat label="Riesgo medio" value={summary.medio} sub={`de ${summary.total} colaboradores`} accent="var(--amber)" />
+        <Stat label="Riesgo alto" value={summary.alto} sub={`de ${summary.total} colaboradores`} accent="var(--rose)" />
+      </div>
+
+      <div className="glass" style={{ padding: 18, marginBottom: 16 }}>
+        <span style={{ fontWeight: 600, fontSize: 13.5 }}>Riesgo por área</span>
+        <ResponsiveContainer width="100%" height={Math.max(180, byDepartment.length * 34)}>
+          <BarChart data={byDepartment} layout="vertical" margin={{ left: 10, right: 20, top: 8 }}>
+            <XAxis type="number" hide />
+            <YAxis type="category" dataKey="department" width={150} tick={{ fill: "var(--muted)", fontSize: 10.5 }} axisLine={false} tickLine={false} />
+            <Tooltip contentStyle={tipStyle} cursor={{ fill: "rgba(255,255,255,.04)" }} />
+            <Bar dataKey="bajo" name="Bajo" stackId="risk" fill="var(--emerald)" />
+            <Bar dataKey="medio" name="Medio" stackId="risk" fill="var(--amber)" />
+            <Bar dataKey="alto" name="Alto" stackId="risk" fill="var(--rose)" radius={[0, 6, 6, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", fontWeight: 600, fontSize: 13 }}>Colaboradores con mayor riesgo</div>
+        <table className="tbl">
+          <thead><tr><th>Empleado</th><th>Depto</th><th>Score</th><th>Nivel</th><th>Factores</th></tr></thead>
+          <tbody>
+            {topRisk.length === 0 ? (
+              <tr style={{ cursor: "default" }}><td colSpan={5} className="muted" style={{ padding: 18 }}>Sin colaboradores en riesgo.</td></tr>
+            ) : topRisk.map((r) => (
+              <tr key={r.employeeId} onClick={() => openExpediente?.(staff.find((s) => s.dbId === r.employeeId), "salud")}>
+                <td style={{ fontWeight: 500 }}>{r.fullName}</td>
+                <td className="muted">{r.department}</td>
+                <td style={{ minWidth: 90 }}>
+                  <div className="row" style={{ gap: 8 }}>
+                    <div className="prog" style={{ width: 60 }}><i style={{ width: `${r.score}%`, background: RISK_COLOR[r.level] }} /></div>
+                    <span className="mono muted2" style={{ fontSize: 11 }}>{r.score}</span>
+                  </div>
+                </td>
+                <td><RiskLevelBadge level={r.level} /></td>
+                <td>
+                  <div className="row" style={{ gap: 5, flexWrap: "wrap" }}>
+                    {r.factors.map((f, i) => <span key={i} className="chip" style={{ fontSize: 10 }}>{f}</span>)}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="muted2" style={{ fontSize: 11, marginTop: 10, fontStyle: "italic" }}>
+        Este análisis es referencial. No sustituye evaluación médica profesional.
+      </div>
+    </div>
+  );
+}
+
+function IndicadoresWKF({ staff, token, openExpediente }) {
   const incap = staff.filter((e) => e.status === "Incapacidad");
   const permiso = staff.filter((e) => e.status === "Permiso").length;
   const ausByArea = useMemo(() => ORG.deptos.map((d) => {
@@ -3158,6 +3315,8 @@ function IndicadoresWKF({ staff, token }) {
           ))}</tbody>
         </table>
       </div>
+
+      <RiesgoSalud staff={staff} token={token} openExpediente={openExpediente} />
     </div>
   );
 }
@@ -3742,7 +3901,7 @@ export default function App() {
           {view === "cockpit" && <Cockpit staff={staff} solicitudes={solicitudes} resolver={resolver} go={setView} attendance={attendance} openExpediente={openExpediente} token={token} onFilterPlantillaStatus={goToPlantillaStatus} />}
           {view === "plantilla" && <Plantilla staff={staff} token={token} openExpediente={openExpediente} socket={socket} refreshStaff={refreshStaff} initialStatusFilter={plantillaFilter} />}
           {view === "solicitudes" && <Solicitudes solicitudes={solicitudes} resueltas={resueltas} resolver={resolver} />}
-          {view === "indicadores" && <IndicadoresWKF staff={staff} token={token} />}
+          {view === "indicadores" && <IndicadoresWKF staff={staff} token={token} openExpediente={openExpediente} />}
           {view === "conectores" && <Conectores token={token} socket={socket} tenantId={tenantId} />}
           {view === "whatsapp" && <WhatsAppPage token={token} />}
           {view === "asistencia" && <Asistencia staff={staff} attendance={attendance} openExpediente={openExpediente} />}

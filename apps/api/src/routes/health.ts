@@ -19,6 +19,7 @@ import { findEmployeeOr404, insertAuditLog } from './employees'
 import { redis } from '../lib/redis'
 import { getIO } from '../lib/syncEmitter'
 import { notifyHR } from '../lib/whatsapp'
+import { invalidateRiskCache } from './risk'
 
 const router = Router()
 
@@ -135,6 +136,7 @@ async function analyzeHealthDocument(opts: {
 
     const urgentes = parsed.insights.filter((i) => i.nivel === 'urgente')
     if (urgentes.length > 0) {
+      await invalidateRiskCache(tenantId).catch(() => {})
       await tenantDb.$executeRaw`
         INSERT INTO notifications (tenant_id, employee_id, type, title, body, link)
         VALUES (${tenantId}, ${employeeId}, 'HEALTH_ALERT', 'Alerta de salud detectada',
@@ -260,6 +262,7 @@ router.patch('/:id/health', requireHR, async (req: Request, res: Response, next:
     const profile = rows[0]
 
     await insertAuditLog(tenantDb, tenantId, req, 'employee.health_updated', `employee:${employeeId}`, { fields: Object.keys(input) })
+    if ('condicionesDeclaradas' in input) await invalidateRiskCache(tenantId).catch(() => {})
 
     res.json(profile)
   } catch (err) {
