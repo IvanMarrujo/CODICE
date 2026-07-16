@@ -1,11 +1,11 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { io } from "socket.io-client";
 import {
   Home, Receipt, CalendarDays, Inbox, Megaphone, Bot, Bell,
-  X, Check, ChevronRight, ChevronDown, Send, Loader2,
+  X, Check, ChevronRight, ChevronDown, ChevronLeft, Send, Loader2,
   Award, Flame, AlertTriangle, DollarSign, Clock, FileText, Lock, LogIn, LogOut, MapPin,
-  ArrowUp, ArrowDown,
+  ArrowUp, ArrowDown, Users,
 } from "lucide-react";
 
 /* ---------- toast bus (mismo patrón que App.jsx, con estilos emp-*) ---------- */
@@ -669,6 +669,26 @@ body{font-family:'DM Sans',system-ui,-apple-system,"Segoe UI",sans-serif}
 .emp-toast-success{border-color:var(--accent-green)}
 .emp-toast-warning{border-color:var(--accent-amber)}
 @keyframes emp-toastin{from{transform:translateY(-8px);opacity:0}to{transform:translateY(0);opacity:1}}
+
+.team-graph-overlay{position:fixed;inset:0;z-index:500;background:
+    radial-gradient(ellipse at 20% 50%, rgba(37,99,235,.12) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 20%, rgba(16,185,129,.08) 0%, transparent 50%),
+    var(--bg-base);overflow:hidden}
+.team-graph-canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+.team-graph-back{position:absolute;top:18px;left:16px;z-index:2;display:flex;align-items:center;gap:4px;
+  font-size:13px;font-weight:600;color:var(--text-secondary);cursor:pointer;padding:8px 10px 8px 6px;
+  border-radius:10px;background:rgba(2,9,23,.5);backdrop-filter:blur(10px)}
+.team-graph-header{position:absolute;top:64px;left:0;right:0;z-index:2;text-align:center;padding:0 16px}
+.team-graph-more{position:absolute;bottom:28px;left:50%;transform:translateX(-50%);z-index:2;
+  font-size:11.5px;font-weight:600;color:var(--text-muted);background:var(--surface-2);border:1px solid var(--border-dim);
+  border-radius:999px;padding:5px 12px}
+.team-graph-popup{position:absolute;z-index:3;transform:translate(-50%,-100%) translateY(-16px);
+  width:168px;padding:14px;border-radius:14px;text-align:center;pointer-events:none;
+  background:var(--surface-1);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  border:1px solid var(--border-glow);box-shadow:0 12px 34px -10px rgba(0,0,10,.7)}
+.team-graph-popup-avatar{width:48px;height:48px;border-radius:50%;margin:0 auto;display:flex;align-items:center;justify-content:center;
+  font-weight:700;font-size:16px;color:#04060a;overflow:hidden}
+.team-graph-popup-avatar img{width:100%;height:100%;object-fit:cover}
 `;
 
 // ── transiciones — editorial: crossfade puro, sin spring ni desplazamiento ──
@@ -925,7 +945,7 @@ function BottomSheet({ title, onClose, children }) {
 
 // ── HOME ─────────────────────────────────────────────────────
 
-function HomeView({ token, employee, unreadCount, onGoAvisos, onGoRecibos, refreshKey }) {
+function HomeView({ token, employee, unreadCount, onGoAvisos, onGoRecibos, onOpenTeam, refreshKey }) {
   const payroll = useLatestPayroll(token, employee.id, refreshKey);
   const p = payroll.data;
   const attendance = useTodayAttendance(token, employee.id);
@@ -1023,6 +1043,23 @@ function HomeView({ token, employee, unreadCount, onGoAvisos, onGoRecibos, refre
           <ChevronRight size={18} color="var(--text-muted)" />
         </div>
       </div>
+
+      {employee.department && (
+        <div className="emp-glass emp-card" style={{ cursor: "pointer" }} onClick={onOpenTeam}>
+          <div className="emp-row" style={{ justifyContent: "space-between" }}>
+            <div className="emp-row" style={{ gap: 10 }}>
+              <div style={{ width: 34, height: 34, borderRadius: 10, background: "var(--surface-2)", display: "grid", placeItems: "center" }}>
+                <Users size={16} color="var(--accent-green)" />
+              </div>
+              <div>
+                <Eyebrow>Tu equipo · {employee.department}</Eyebrow>
+                <div style={{ fontSize: 13, marginTop: 4 }}>Ver todos →</div>
+              </div>
+            </div>
+            <ChevronRight size={18} color="var(--text-muted)" />
+          </div>
+        </div>
+      )}
 
       <AnimatePresence>
         {checkin.confirm && (
@@ -1769,6 +1806,272 @@ function EmpToastHost() {
   );
 }
 
+// ── CONOCE A TU EQUIPO — grafo de compañeros (Canvas 2D) ───────
+// Nodo central = colaborador actual (no interactivo). Compañeros del mismo
+// departamento en órbita alrededor, hasta 12 visibles. Posición estable por
+// sesión (semillada por employeeId, no aleatoria en cada render).
+
+function seededRng(seedStr) {
+  let h = 1779033703 ^ String(seedStr).length;
+  for (let i = 0; i < String(seedStr).length; i++) {
+    h = Math.imul(h ^ String(seedStr).charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  return function () {
+    h = Math.imul(h ^ (h >>> 16), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    h ^= h >>> 16;
+    return (h >>> 0) / 4294967296;
+  };
+}
+
+const TEAM_NODE_R = 18;
+const TEAM_CENTER_R = 24;
+const TEAM_ORBIT_MIN = 100;
+const TEAM_ORBIT_MAX = 170;
+
+class TeamGraphField {
+  constructor(canvas, { center, teammates, onHoverChange }) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext("2d");
+    this.dpr = Math.min(window.devicePixelRatio || 1, 2);
+    this.center = center;
+    this.teammates = teammates;
+    this.onHoverChange = onHoverChange;
+    this.hoverIdx = -1;
+    this.selectedIdx = -1; // tap-to-pin en móvil
+    this.mouse = null;
+    this.images = new Map();
+    this.clock0 = performance.now();
+
+    this._layout();
+
+    this._onMove = (e) => {
+      const rect = this.canvas.getBoundingClientRect();
+      this.mouse = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      if (this.selectedIdx < 0) this._setHover(this._nodeAt(this.mouse.x, this.mouse.y));
+    };
+    this._onLeave = () => { this.mouse = null; if (this.selectedIdx < 0) this._setHover(-1); };
+    this._onClick = (e) => {
+      const rect = this.canvas.getBoundingClientRect();
+      const idx = this._nodeAt(e.clientX - rect.left, e.clientY - rect.top);
+      this.selectedIdx = idx === this.selectedIdx ? -1 : idx;
+      this._setHover(this.selectedIdx);
+    };
+    canvas.addEventListener("pointermove", this._onMove);
+    canvas.addEventListener("pointerleave", this._onLeave);
+    canvas.addEventListener("click", this._onClick);
+
+    this.resize();
+  }
+
+  _layout() {
+    const n = this.teammates.length;
+    this.nodes = this.teammates.map((t, i) => {
+      const rng = seededRng(t.id);
+      const baseAngle = (i / Math.max(1, n)) * Math.PI * 2 - Math.PI / 2;
+      const angle = baseAngle + (rng() - 0.5) * (Math.PI / Math.max(1, n)) * 0.7;
+      const radius = TEAM_ORBIT_MIN + rng() * (TEAM_ORBIT_MAX - TEAM_ORBIT_MIN);
+      const node = { ...t, angle, radius, driftPhase: rng() * Math.PI * 2, driftSpeed: 0.12 + rng() * 0.1, x: 0, y: 0 };
+      if (t.photoUrl && !this.images.has(t.id)) {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.src = t.photoUrl;
+        this.images.set(t.id, img);
+      }
+      return node;
+    });
+  }
+
+  _nodeAt(x, y) {
+    for (let i = 0; i < this.nodes.length; i++) {
+      if (Math.hypot(this.nodes[i].x - x, this.nodes[i].y - y) < TEAM_NODE_R + 8) return i;
+    }
+    return -1;
+  }
+
+  _setHover(idx) {
+    if (idx === this.hoverIdx) return;
+    this.hoverIdx = idx;
+    this.onHoverChange(idx >= 0 ? { node: this.nodes[idx], x: this.nodes[idx].x, y: this.nodes[idx].y } : null);
+  }
+
+  resize() {
+    const rect = this.canvas.getBoundingClientRect();
+    this.w = rect.width; this.h = rect.height;
+    this.canvas.width = this.w * this.dpr;
+    this.canvas.height = this.h * this.dpr;
+    this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this.cx = this.w / 2; this.cy = this.h / 2 - 10;
+  }
+
+  draw() {
+    const now = performance.now();
+    const t = (now - this.clock0) / 1000;
+    const ctx = this.ctx;
+    ctx.clearRect(0, 0, this.w, this.h);
+
+    for (const n of this.nodes) {
+      const dx = Math.sin(t * n.driftSpeed + n.driftPhase) * 7;
+      const dy = Math.cos(t * n.driftSpeed * 0.85 + n.driftPhase) * 7;
+      n.x = this.cx + Math.cos(n.angle) * n.radius + dx;
+      n.y = this.cy + Math.sin(n.angle) * n.radius * 0.78 + dy;
+    }
+    // reposiciona el nodo bajo hover/selección si aplica (coords ya actualizadas arriba)
+    if (this.hoverIdx >= 0) this.onHoverChange({ node: this.nodes[this.hoverIdx], x: this.nodes[this.hoverIdx].x, y: this.nodes[this.hoverIdx].y });
+
+    // líneas centro -> compañero, según regla de turno/planta
+    for (const n of this.nodes) {
+      const sameShift = n.shift && this.center.shift && n.shift === this.center.shift;
+      const samePlantOnly = !sameShift && n.plant && this.center.plant && n.plant === this.center.plant;
+      if (!sameShift && !samePlantOnly) continue;
+      ctx.beginPath();
+      ctx.moveTo(this.cx, this.cy);
+      ctx.lineTo(n.x, n.y);
+      if (sameShift) {
+        const pulse = 0.22 + Math.sin(t * 1.6 + n.driftPhase) * 0.08;
+        ctx.setLineDash([]);
+        ctx.strokeStyle = `rgba(0,200,150,${pulse})`;
+        ctx.lineWidth = 1.2;
+      } else {
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = "rgba(255,255,255,.15)";
+        ctx.lineWidth = 1;
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    this._drawNode(this.cx, this.cy, TEAM_CENTER_R, this.center, false, true);
+    for (let i = 0; i < this.nodes.length; i++) {
+      this._drawNode(this.nodes[i].x, this.nodes[i].y, TEAM_NODE_R, this.nodes[i], this.hoverIdx === i, false);
+    }
+  }
+
+  _drawNode(x, y, baseR, data, isHover, isCenter) {
+    const ctx = this.ctx;
+    const r = isHover ? baseR * 1.2 : baseR;
+    const img = this.images.get(data.id);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.closePath();
+    if (img && img.complete && img.naturalWidth > 0) {
+      ctx.save();
+      ctx.clip();
+      ctx.drawImage(img, x - r, y - r, r * 2, r * 2);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = isCenter ? "#00c896" : (data.avatarColor || "#4db8ff");
+      ctx.fill();
+      ctx.fillStyle = "#04060a";
+      ctx.font = `700 ${Math.round(r * 0.68)}px 'DM Sans', sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(data.initials || "", x, y + 1);
+    }
+    ctx.lineWidth = isCenter ? 3 : 2;
+    ctx.strokeStyle = isCenter ? "#00c896" : (isHover ? "#ffffff" : "rgba(255,255,255,.25)");
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.fillStyle = "rgba(232,240,254,.9)";
+    ctx.font = "600 11.5px 'DM Sans', sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(isCenter ? "Tú" : (data.firstName || ""), x, y + r + 15);
+
+    if (!isCenter && data.position) {
+      ctx.fillStyle = "rgba(232,240,254,.45)";
+      ctx.font = "400 10px 'DM Sans', sans-serif";
+      const label = data.position.length > 15 ? `${data.position.slice(0, 14)}…` : data.position;
+      ctx.fillText(label, x, y + r + 27);
+    }
+  }
+
+  dispose() {
+    this.canvas.removeEventListener("pointermove", this._onMove);
+    this.canvas.removeEventListener("pointerleave", this._onLeave);
+    this.canvas.removeEventListener("click", this._onClick);
+  }
+}
+
+function useTeamGraphField(canvasRef, center, teammates, onHoverChange) {
+  const fieldRef = useRef(null);
+  useEffect(() => {
+    if (!canvasRef.current || !center) return undefined;
+    const field = new TeamGraphField(canvasRef.current, { center, teammates, onHoverChange });
+    fieldRef.current = field;
+    let raf;
+    const loop = () => { field.draw(); raf = requestAnimationFrame(loop); };
+    loop();
+    const onResize = () => field.resize();
+    window.addEventListener("resize", onResize);
+    return () => { cancelAnimationFrame(raf); field.dispose(); window.removeEventListener("resize", onResize); fieldRef.current = null; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canvasRef, center?.id, teammates]);
+  return fieldRef;
+}
+
+function TeamGraphView({ token, employee, onClose }) {
+  const canvasRef = useRef(null);
+  const [team, setTeam] = useState({ status: "loading", employees: [] });
+  const [hover, setHover] = useState(null);
+
+  useEffect(() => {
+    if (!employee?.department) { setTeam({ status: "error", employees: [] }); return; }
+    apiFetch(token, `/api/employees/team?department=${encodeURIComponent(employee.department)}`)
+      .then((d) => setTeam({ status: "ready", employees: (d.employees || []).filter((e) => e.id !== employee.id) }))
+      .catch(() => setTeam({ status: "error", employees: [] }));
+  }, [token, employee?.department, employee?.id]);
+
+  const visible = useMemo(() => team.employees.slice(0, 12), [team.employees]);
+  const extraCount = Math.max(0, team.employees.length - 12);
+
+  const center = useMemo(() => (employee ? {
+    id: employee.id,
+    shift: employee.shift,
+    plant: employee.plant,
+    initials: `${(employee.first_name || "?")[0] || ""}${(employee.last_name || "")[0] || ""}`.toUpperCase(),
+  } : null), [employee]);
+
+  const onHoverChange = useCallback((h) => setHover(h), []);
+  useTeamGraphField(canvasRef, team.status === "ready" ? center : null, visible, onHoverChange);
+
+  return (
+    <motion.div className="team-graph-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1, transition: { duration: 0.25 } }} exit={{ opacity: 0, transition: { duration: 0.2 } }}>
+      <canvas ref={canvasRef} className="team-graph-canvas" />
+
+      <div className="team-graph-back" onClick={onClose}><ChevronLeft size={18} />Regresar</div>
+
+      <div className="team-graph-header">
+        <div className="emp-h1" style={{ margin: "0 0 2px" }}>Tu equipo · {employee.department}</div>
+        <div className="emp-muted" style={{ fontSize: 12.5 }}>
+          {team.status === "loading" && "Cargando compañeros…"}
+          {team.status === "error" && "No se pudo cargar tu equipo."}
+          {team.status === "ready" && `${team.employees.length} compañero${team.employees.length === 1 ? "" : "s"} en ${employee.department}`}
+        </div>
+      </div>
+
+      {extraCount > 0 && <div className="team-graph-more">+{extraCount} más</div>}
+
+      {hover && (
+        <div className="team-graph-popup" style={{ left: hover.x, top: hover.y }}>
+          <div className="team-graph-popup-avatar" style={{ background: hover.node.avatarColor || "#4db8ff" }}>
+            {hover.node.photoUrl ? <img src={hover.node.photoUrl} alt="" /> : hover.node.initials}
+          </div>
+          <div style={{ fontWeight: 700, fontSize: 13, marginTop: 8 }}>{hover.node.firstName} {hover.node.lastName}</div>
+          <div className="emp-muted" style={{ fontSize: 11.5, marginTop: 2 }}>{hover.node.position || "—"}</div>
+          <div className="emp-muted" style={{ fontSize: 11, marginTop: 4 }}>Turno {hover.node.shift || "—"}</div>
+          <div className="emp-muted" style={{ fontSize: 11 }}>{hover.node.plant || "—"}</div>
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
 // ── APP ──────────────────────────────────────────────────────
 
 const NAV = [
@@ -1794,6 +2097,7 @@ export default function EmpleadoShell() {
   const [showGreet, setShowGreet] = useState(true);
   const [iaLocked, setIaLocked] = useState(false);
   const [payrollRefreshKey, setPayrollRefreshKey] = useState(0);
+  const [teamGraphOpen, setTeamGraphOpen] = useState(false);
   const socketRef = useRef(null);
 
   const explode = useCallback(() => fieldRef.current?.explode(), [fieldRef]);
@@ -1901,7 +2205,7 @@ export default function EmpleadoShell() {
 
           <main className="emp-main">
             <AnimatePresence mode="wait">
-              {view === "home" && <div key="home"><HomeView token={token} employee={employee} unreadCount={unreadCount} onGoAvisos={() => openModule("avisos")} onGoRecibos={() => openModule("recibos")} refreshKey={payrollRefreshKey} /></div>}
+              {view === "home" && <div key="home"><HomeView token={token} employee={employee} unreadCount={unreadCount} onGoAvisos={() => openModule("avisos")} onGoRecibos={() => openModule("recibos")} onOpenTeam={() => setTeamGraphOpen(true)} refreshKey={payrollRefreshKey} /></div>}
               {view === "recibos" && <div key="recibos"><RecibosView token={token} employee={employee} onOpen={() => pulse("#3b82f6")} refreshKey={payrollRefreshKey} /></div>}
               {view === "vacaciones" && <div key="vacaciones"><VacacionesView token={token} employee={employee} onSuccess={success} /></div>}
               {view === "solicitudes" && <div key="solicitudes"><SolicitudesView token={token} employee={employee} onSuccess={success} /></div>}
@@ -1931,6 +2235,10 @@ export default function EmpleadoShell() {
           </nav>
         </div>
       )}
+
+      <AnimatePresence>
+        {teamGraphOpen && employee && <TeamGraphView token={token} employee={employee} onClose={() => setTeamGraphOpen(false)} />}
+      </AnimatePresence>
     </div>
   );
 }

@@ -14,6 +14,32 @@ const router = Router()
 
 router.get('/', (req, res) => res.json({ route: 'contracts', status: 'ok' }))
 
+// ── GET /api/contracts/expiring-soon ─────────────────────────
+// Contratos con end_date dentro de los próximos 30 días — alimenta la
+// alerta proactiva del asistente flotante (Feature 1, "outbreak de energía").
+
+router.get('/expiring-soon', requireHR, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tenantId = req.tenant.id
+    const rows = await req.tenantDb.$queryRaw<any[]>`
+      SELECT e.full_name, c.end_date
+      FROM contracts c
+      JOIN employees e ON e.id = c.employee_id
+      WHERE c.tenant_id = ${tenantId} AND c.end_date BETWEEN NOW() AND NOW() + INTERVAL '30 days'
+      ORDER BY c.end_date ASC
+      LIMIT 20
+    `
+    const contracts = rows.map((r: any) => ({
+      fullName: r.full_name,
+      endDate:  r.end_date,
+      daysLeft: Math.max(0, Math.ceil((new Date(r.end_date).getTime() - Date.now()) / 86400000)),
+    }))
+    res.json({ contracts })
+  } catch (err) {
+    next(err)
+  }
+})
+
 const mxn = (n: number) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(Math.round(n))
 const mxn2 = (n: number) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 2 }).format(n)
 const fmtDate = (d: unknown) => d ? new Date(d as string).toISOString().slice(0, 10) : '[fecha]'

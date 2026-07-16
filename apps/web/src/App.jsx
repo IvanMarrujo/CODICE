@@ -12,6 +12,7 @@ import {
   TrendingUp, ClipboardCheck, UserCheck, Zap, Plug, MapPin, QrCode, DollarSign, Upload,
   Pause, Play, Trash2, Unplug, Pencil, CheckSquare, Square, Lock, FileHeart, MessageSquare, Copy,
 } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 import { io } from "socket.io-client";
 import {
   login, fetchEmployees, mapEmployee, fetchAttendance,
@@ -28,6 +29,7 @@ import {
   fetchWhatsAppSettings, updateWhatsAppSettings, fetchWhatsAppMockLog, simulateWhatsAppAgent,
   fetchVacationPolicy, updateVacationPolicy, fetchStorageStatus, downloadNdaPreview,
   fetchRiskSummary, fetchRiskNarrative,
+  fetchContractsExpiringSoon, consultAIStream,
 } from "./api.js";
 
 // Credenciales de auto-login del cockpit admin (tenant único GFP). Vienen de
@@ -161,6 +163,20 @@ label.fld{display:block;font-size:11px;color:var(--muted);margin-bottom:5px;font
 .stepdot.done{background:rgba(79,214,163,.16);border-color:rgba(79,214,163,.4);color:var(--emerald)}
 .stepline{flex:1;height:2px;background:var(--border);min-width:10px}
 .stepline.done{background:var(--emerald)}
+
+.ai-bubble{position:fixed;bottom:24px;right:24px;z-index:9999;width:52px;height:52px;border-radius:50%;
+  background:linear-gradient(135deg,#00c896,#00a67d);display:grid;place-items:center;cursor:pointer;
+  box-shadow:0 8px 32px rgba(0,200,150,.25)}
+.ai-bubble-dot{position:absolute;top:2px;right:2px;width:11px;height:11px;border-radius:50%;background:var(--rose);
+  border:2px solid #04060a}
+.ai-panel{position:fixed;bottom:24px;right:24px;z-index:9999;width:360px;height:480px;max-height:calc(100vh - 48px);
+  display:flex;flex-direction:column;overflow:hidden;
+  background:rgba(6,20,45,.95);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+  border:1px solid rgba(0,200,150,.3);border-radius:18px;box-shadow:0 8px 32px rgba(0,200,150,.25)}
+.typing-inline{display:inline-flex;gap:2px}
+.typing-inline span{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--muted);animation:blink 1.2s infinite}
+.typing-inline span:nth-child(2){animation-delay:.2s}.typing-inline span:nth-child(3){animation-delay:.4s}
+@media (max-width: 480px){.ai-panel{width:calc(100vw - 24px);right:12px;bottom:12px}.ai-bubble{right:16px;bottom:16px}}
 `;
 
 /* ---------- helpers ---------- */
@@ -3761,6 +3777,193 @@ function Asistencia({ staff, attendance, openExpediente }) {
 /* ============================================================
    APP
    ============================================================ */
+/* ============================================================
+   ASISTENTE IA FLOTANTE — burbuja global del shell admin.
+   Contexto por vista (datos reales de staff/solicitudes/asistencia,
+   ya en memoria) + alertas proactivas (contratos/sync/riesgo, vía API).
+   ============================================================ */
+
+function computeContextInsight(view, staff, solicitudes, attendance, extra) {
+  const activeStaff = staff.filter((s) => s.status === "Activo").length;
+  switch (view) {
+    case "cockpit": {
+      const checked = attendance?.checkedIn ?? 0;
+      return `${activeStaff} colaboradores activos, ${solicitudes.length} solicitud${solicitudes.length === 1 ? "" : "es"} en trámite y ${checked} check-ins registrados hoy.`;
+    }
+    case "plantilla": {
+      const porStatus = {};
+      for (const s of staff) porStatus[s.status] = (porStatus[s.status] || 0) + 1;
+      const top = Object.entries(porStatus).sort((a, b) => b[1] - a[1])[0];
+      const contratos = extra.contracts.length;
+      return `${staff.length} colaboradores en plantilla · estatus más común: ${top ? `${top[0]} (${top[1]})` : "sin datos"}.${contratos ? ` ${contratos} contrato${contratos === 1 ? "" : "s"} vence${contratos === 1 ? "" : "n"} en los próximos 30 días.` : ""}`;
+    }
+    case "solicitudes": {
+      const now = Date.now();
+      const vencidas = solicitudes.filter((s) => now - new Date(s.fecha).getTime() > 48 * 3600 * 1000).length;
+      return vencidas > 0
+        ? `${vencidas} solicitud${vencidas === 1 ? "" : "es"} llevan más de 48h sin resolverse — revisa la cola antes de que escalen.`
+        : `${solicitudes.length} solicitudes en trámite, ninguna lleva más de 48h.`;
+    }
+    case "indicadores": {
+      const ult = AUSENTISMO[AUSENTISMO.length - 1];
+      const riesgo = extra.riskAlto;
+      return `Ausentismo del mes: ${ult?.v ?? "—"}%, rotación ${ult?.rot ?? "—"}%.${riesgo ? ` ${riesgo} colaborador${riesgo === 1 ? "" : "es"} en riesgo alto de salud.` : ""}`;
+    }
+    case "asistencia": {
+      const total = attendance?.totalActive ?? 0;
+      const checked = attendance?.checkedIn ?? 0;
+      const pct = total ? Math.round((checked / total) * 100) : 0;
+      return `${checked} de ${total} colaboradores han registrado entrada hoy (${pct}%).`;
+    }
+    case "conectores": {
+      if (extra.lastSyncDays == null) return "Aún no hay sincronizaciones registradas para este tenant.";
+      return extra.lastSyncDays === 0
+        ? "Los datos están al día — última sincronización hoy."
+        : `Última sincronización hace ${extra.lastSyncDays} día${extra.lastSyncDays === 1 ? "" : "s"}.`;
+    }
+    default:
+      return `${activeStaff} colaboradores activos en este momento.`;
+  }
+}
+
+function buildProactiveAlerts({ solicitudes, extra }) {
+  const list = [];
+  const now = Date.now();
+  const vencidas = solicitudes.filter((s) => now - new Date(s.fecha).getTime() > 48 * 3600 * 1000);
+  if (vencidas.length > 0) {
+    list.push({ id: "solicitudes", icon: "⚠️", text: `${vencidas.length} solicitud${vencidas.length === 1 ? "" : "es"} sin respuesta hace más de 48h`, view: "solicitudes" });
+  }
+  if (extra.contracts.length > 0) {
+    const first = extra.contracts[0];
+    list.push({
+      id: "contratos", icon: "⚠️",
+      text: extra.contracts.length === 1 ? `1 contrato vence en ${first.daysLeft} día${first.daysLeft === 1 ? "" : "s"}` : `${extra.contracts.length} contratos vencen en los próximos 30 días`,
+      view: "contratos",
+    });
+  }
+  if (extra.lastSyncDays != null && extra.lastSyncDays > 7) {
+    list.push({ id: "sync", icon: "⚠️", text: `Nómina sin actualizar hace ${extra.lastSyncDays} días`, view: "conectores" });
+  }
+  if (extra.riskAlto > 0) {
+    list.push({ id: "riesgo", icon: "🔴", text: `${extra.riskAlto} colaborador${extra.riskAlto === 1 ? "" : "es"} en riesgo alto de salud`, view: "indicadores" });
+  }
+  return list;
+}
+
+function FloatingAIAssistant({ view, staff, solicitudes, attendance, token, go }) {
+  const [open, setOpen] = useState(false);
+  const [msgs, setMsgs] = useState([]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [streaming, setStreaming] = useState("");
+  const [extra, setExtra] = useState({ contracts: [], lastSyncDays: null, riskAlto: 0 });
+  const [dismissedAlerts, setDismissedAlerts] = useState(() => new Set());
+  const end = useRef(null);
+
+  useEffect(() => {
+    if (!token) return;
+    fetchContractsExpiringSoon(token).then((d) => setExtra((e) => ({ ...e, contracts: d.contracts || [] }))).catch(() => {});
+    fetchSyncLogLatest(token).then((d) => {
+      const last = d?.finishedAt || d?.startedAt;
+      const days = last ? Math.floor((Date.now() - new Date(last).getTime()) / 86400000) : null;
+      setExtra((e) => ({ ...e, lastSyncDays: days }));
+    }).catch(() => {});
+    fetchRiskSummary(token).then((d) => setExtra((e) => ({ ...e, riskAlto: d?.summary?.alto || 0 }))).catch(() => {});
+  }, [token]);
+
+  const contextInsight = useMemo(() => computeContextInsight(view, staff, solicitudes, attendance, extra), [view, staff, solicitudes, attendance, extra]);
+  const alerts = useMemo(() => buildProactiveAlerts({ solicitudes, extra }).filter((a) => !dismissedAlerts.has(a.id)), [solicitudes, extra, dismissedAlerts]);
+  const hasUnread = alerts.length > 0;
+
+  useEffect(() => { if (open) end.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, streaming, open]);
+
+  const send = async (text) => {
+    const t = (text ?? input).trim();
+    if (!t || busy || !token) return;
+    setMsgs((m) => [...m, { role: "user", content: t }]);
+    setInput("");
+    setBusy(true);
+    setStreaming("");
+    const context = `Vista actual: ${view}. Insight de contexto: ${contextInsight}`;
+    try {
+      const full = await consultAIStream(token, { question: t, context }, setStreaming);
+      setMsgs((m) => [...m, { role: "assistant", content: full || "No obtuve respuesta." }]);
+    } catch {
+      setMsgs((m) => [...m, { role: "assistant", content: "No pude conectar con la IA. Intenta de nuevo." }]);
+    } finally {
+      setBusy(false);
+      setStreaming("");
+    }
+  };
+
+  const visibleMsgs = msgs.slice(-5);
+
+  return (
+    <>
+      <motion.div
+        className="ai-bubble"
+        onClick={() => setOpen(true)}
+        whileTap={{ scale: 0.92 }}
+        animate={{ scale: open ? 0 : 1, opacity: open ? 0 : 1 }}
+        transition={{ type: "spring", stiffness: 340, damping: 26 }}
+        style={{ pointerEvents: open ? "none" : "auto" }}
+      >
+        <Sparkles size={22} color="#04060a" />
+        {hasUnread && <span className="ai-bubble-dot" />}
+      </motion.div>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            className="ai-panel"
+            initial={{ opacity: 0, scale: 0.85, y: 30 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.85, y: 30 }}
+            transition={{ type: "spring", stiffness: 320, damping: 28 }}
+          >
+            <div className="row" style={{ justifyContent: "space-between", padding: "12px 14px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+              <span style={{ fontWeight: 700, fontSize: 13 }}>✦ Asistente CÓDICE</span>
+              <X size={16} style={{ cursor: "pointer" }} onClick={() => setOpen(false)} />
+            </div>
+
+            <div style={{ padding: "10px 14px 0", flexShrink: 0, maxHeight: 190, overflowY: "auto" }}>
+              <div className="glass-2" style={{ padding: 10, marginBottom: 8 }}>
+                <div className="muted2" style={{ fontSize: 10, marginBottom: 3, textTransform: "uppercase", letterSpacing: ".08em" }}>💡 Contexto actual</div>
+                <div style={{ fontSize: 12, lineHeight: 1.4 }}>{contextInsight}</div>
+              </div>
+
+              {alerts.map((a) => (
+                <div key={a.id} className="row" style={{ gap: 7, padding: "7px 9px", marginBottom: 8, borderRadius: 9, background: "rgba(245,181,68,.1)", border: "1px solid rgba(245,181,68,.25)", cursor: "pointer" }}
+                  onClick={() => { go?.(a.view); setOpen(false); }}>
+                  <span style={{ fontSize: 12, flex: 1 }}>{a.icon} {a.text}</span>
+                  <X size={12} style={{ cursor: "pointer", flexShrink: 0 }} onClick={(e) => { e.stopPropagation(); setDismissedAlerts((s) => new Set(s).add(a.id)); }} />
+                </div>
+              ))}
+            </div>
+
+            <div style={{ flex: 1, overflowY: "auto", padding: "8px 14px", display: "flex", flexDirection: "column", gap: 8, borderTop: "1px solid var(--border)", minHeight: 0 }}>
+              {visibleMsgs.length === 0 && <div className="muted2" style={{ fontSize: 11.5, textAlign: "center", marginTop: 20 }}>Pregúntame sobre lo que ves en pantalla.</div>}
+              {visibleMsgs.map((m, i) => <div key={i} className={`bubble ${m.role === "user" ? "u" : "a"}`}>{m.content}</div>)}
+              {busy && (
+                <div className="bubble a">
+                  {streaming || <span className="typing-inline"><span></span><span></span><span></span></span>}
+                </div>
+              )}
+              <div ref={end} />
+            </div>
+
+            <div className="row" style={{ gap: 8, padding: 10, borderTop: "1px solid var(--border)", flexShrink: 0 }}>
+              <input className="input" style={{ fontSize: 12.5 }} placeholder="Pregunta a la IA…" value={input}
+                onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} disabled={busy} />
+              <button className="btn btn-accent" onClick={() => send()} disabled={busy}><Send size={14} /></button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
+  );
+}
+
 const NAV = [
   ["_s", "Operación"],
   ["cockpit", "Cockpit", LayoutDashboard], ["plantilla", "Plantilla", Users],
@@ -3914,6 +4117,7 @@ export default function App() {
           {view === "consultor" && <Consultor />}
         </main>
       </div>
+      <FloatingAIAssistant view={view} staff={staff} solicitudes={solicitudes} attendance={attendance} token={token} go={setView} />
       {expedienteEmp && (
         <ProfileDrawer
           e={expedienteEmp}

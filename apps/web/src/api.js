@@ -320,6 +320,48 @@ export function fetchRiskNarrative(token, { refresh = false } = {}) {
   return authedFetchJSON(token, `/api/employees/risk-summary/narrative${refresh ? "?refresh=true" : ""}`, "POST");
 }
 
+export function fetchContractsExpiringSoon(token) {
+  return authedFetch(token, `/api/contracts/expiring-soon`);
+}
+
+export function fetchTeam(token, department) {
+  return authedFetch(token, `/api/employees/team?department=${encodeURIComponent(department)}`);
+}
+
+// SSE streaming hacia /api/ai/consult (ver routes/ai.ts) — a diferencia de
+// askClaude() de arriba (llamada directa al API público, sin backend), este
+// pasa por el proxy autenticado del tenant y hace streaming real vía
+// ReadableStream (fetch no soporta EventSource con POST + headers custom).
+export async function consultAIStream(token, { question, context }, onDelta) {
+  const res = await fetch(`${API_BASE}/api/ai/consult`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ question, context }),
+  });
+  if (!res.ok || !res.body) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Error de IA (${res.status})`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let full = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const payload = JSON.parse(line.slice(6));
+      if (payload.type === "delta") { full += payload.text; onDelta(full); }
+      else if (payload.type === "error") throw new Error(payload.message);
+    }
+  }
+  return full;
+}
+
 export async function downloadHealthDocument(token, employeeId, docId, filename) {
   const res = await fetch(`${API_BASE}/api/employees/${employeeId}/health/documents/${docId}/download`, {
     headers: { Authorization: `Bearer ${token}` },

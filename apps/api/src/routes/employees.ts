@@ -8,7 +8,7 @@
 import { Router, Request, Response, NextFunction } from 'express'
 import { z } from 'zod'
 import { Prisma } from '@prisma/client'
-import { requireHR } from '../middleware/auth'
+import { requireHR, requireEmployee } from '../middleware/auth'
 import { AppError } from '../lib/errors'
 
 const router = Router()
@@ -180,6 +180,59 @@ router.get('/status-summary', requireHR, async (req: Request, res: Response, nex
     summary.total = total
 
     res.json(summary)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── GET /api/employees/team ───────────────────────────────────
+// "Conoce a tu equipo" (shell colaborador) — solo campos seguros para
+// mostrar en el grafo de compañeros. Nunca salario/RFC/CURP/NSS/banco.
+// requireEmployee (no requireHR): la usa el propio colaborador, no solo RH.
+
+const AVATAR_PALETTE = [
+  '#00c896', '#4db8ff', '#f5c518', '#a78bfa', '#f97316',
+  '#34d399', '#f472b6', '#60a5fa', '#fb923c', '#22d3ee',
+]
+
+function avatarColorFor(name: string): string {
+  let hash = 0
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0
+  return AVATAR_PALETTE[hash % AVATAR_PALETTE.length]
+}
+
+function initialsFor(firstName: string, lastName: string): string {
+  return `${(firstName || '?')[0] ?? ''}${(lastName || '')[0] ?? ''}`.toUpperCase()
+}
+
+router.get('/team', requireEmployee, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tenantId = req.tenant.id
+    const department = String(req.query.department || '')
+    if (!department) throw new AppError(400, 'Falta el parámetro department')
+
+    const rows = await req.tenantDb.$queryRaw<any[]>`
+      SELECT id, first_name, last_name, position, department, shift, plant, avatar_url
+      FROM employees
+      WHERE tenant_id = ${tenantId} AND department = ${department} AND status = 'Activo'
+      ORDER BY first_name
+      LIMIT 200
+    `
+
+    const employees = rows.map((r: any) => ({
+      id:          r.id,
+      firstName:   r.first_name,
+      lastName:    r.last_name,
+      position:    r.position,
+      department:  r.department,
+      shift:       r.shift,
+      plant:       r.plant,
+      photoUrl:    r.avatar_url || null,
+      initials:    initialsFor(r.first_name, r.last_name),
+      avatarColor: avatarColorFor(`${r.first_name} ${r.last_name}`),
+    }))
+
+    res.json({ employees })
   } catch (err) {
     next(err)
   }
