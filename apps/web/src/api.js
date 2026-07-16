@@ -183,10 +183,11 @@ export function previewCfdi(token, files) {
 
 // Sube archivos a un conector (multipart) con progreso real vía XHR — fetch
 // no expone eventos de progreso de subida.
-export function uploadConnectorFile(token, endpointPath, files, onProgress) {
+export function uploadConnectorFile(token, endpointPath, files, onProgress, extraFields) {
   return new Promise((resolve, reject) => {
     const form = new FormData();
     Array.from(files).forEach((f) => form.append("files", f));
+    if (extraFields) Object.entries(extraFields).forEach(([k, v]) => form.append(k, v));
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE}${endpointPath}`);

@@ -5,7 +5,7 @@
 // ============================================================
 
 import * as XLSX from 'xlsx'
-import { mapHeaders, CanonicalField, PAYROLL_FIELDS } from './fieldMapper'
+import { mapHeaders, suggestField, CanonicalField, PAYROLL_FIELDS, FieldSuggestion } from './fieldMapper'
 
 // Campos de payroll_records que una fila de Excel puede traer además de los
 // datos del empleado — ver mapRowValues(). `period` no es una columna real
@@ -28,22 +28,26 @@ export interface ParsedPayrollFields {
 }
 
 export interface ParsedEmployeeRow {
-  row:            number   // número de fila en la hoja (1-based, incluye header)
-  first_name?:    string
-  last_name?:     string
-  rfc?:           string
-  curp?:          string
-  nss?:           string
-  daily_salary?:  number
-  department?:    string
-  position?:      string
-  plant?:         string
-  shift?:         string
-  hire_date?:     Date
-  contract_type?: string
-  status?:        string
-  employee_code?: string  // no mapeado por ningún alias hoy; reservado para el upsert
-  payroll?:       ParsedPayrollFields  // presente solo si la fila trae columnas de nómina
+  row:             number   // número de fila en la hoja (1-based, incluye header)
+  first_name?:     string
+  last_name?:      string
+  rfc?:            string
+  curp?:           string
+  nss?:            string
+  daily_salary?:   number
+  monthly_salary?: number
+  department?:     string
+  position?:       string
+  plant?:          string
+  shift?:          string
+  hire_date?:      Date
+  contract_type?:  string
+  status?:         string
+  employee_code?:  string
+  bank_name?:      string
+  bank_clabe?:     string
+  notes?:          string
+  payroll?:        ParsedPayrollFields  // presente solo si la fila trae columnas de nómina
 }
 
 export interface RowError {
@@ -56,8 +60,11 @@ export interface ParseResult {
   errors: RowError[]
 }
 
-/** Parsea un buffer .xlsx/.csv y devuelve filas mapeadas + errores por fila. Nunca lanza. */
-export function parseExcelBuffer(buffer: Buffer, filename: string): ParseResult {
+/** Parsea un buffer .xlsx/.csv y devuelve filas mapeadas + errores por fila. Nunca lanza.
+ * `overrideMap` (opcional): mapeo header de texto -> CanonicalField confirmado
+ * por el usuario en el Step 3 del wizard — tiene prioridad sobre la
+ * auto-detección por alias (ver mapHeaders en fieldMapper.ts). */
+export function parseExcelBuffer(buffer: Buffer, filename: string, overrideMap?: Record<string, string>): ParseResult {
   let workbook: XLSX.WorkBook
   try {
     workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true })
@@ -75,7 +82,7 @@ export function parseExcelBuffer(buffer: Buffer, filename: string): ParseResult 
   if (raw.length === 0) return { rows: [], errors: [] }
 
   const headerRow = raw[0] || []
-  const columnMap = mapHeaders(headerRow)
+  const columnMap = mapHeaders(headerRow, overrideMap)
   if (columnMap.size === 0) {
     return { rows: [], errors: [{ row: 1, message: `"${filename}": no se reconoció ninguna columna en el encabezado` }] }
   }
@@ -108,9 +115,10 @@ export function parseExcelBuffer(buffer: Buffer, filename: string): ParseResult 
 }
 
 export interface HeaderMatch {
-  index: number
-  label: string
-  field: CanonicalField | null
+  index:      number
+  label:      string
+  field:      CanonicalField | null
+  suggestion: FieldSuggestion | null // solo presente cuando field === null
 }
 
 export interface PreviewResult {
@@ -124,8 +132,10 @@ export interface PreviewResult {
  * Como parseExcelBuffer pero además devuelve el detalle de mapeo de columnas
  * (para el wizard de conectores — Step 3, "field mapper") y solo las
  * primeras `maxPreviewRows` filas ya parseadas. Sin efectos secundarios.
+ * `overrideMap`: ver parseExcelBuffer — mapeo guardado del tenant o
+ * confirmado a mano, tiene prioridad sobre la auto-detección.
  */
-export function previewExcelBuffer(buffer: Buffer, filename: string, maxPreviewRows = 5): PreviewResult {
+export function previewExcelBuffer(buffer: Buffer, filename: string, maxPreviewRows = 5, overrideMap?: Record<string, string>): PreviewResult {
   let workbook: XLSX.WorkBook
   try {
     workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true })
@@ -141,13 +151,17 @@ export function previewExcelBuffer(buffer: Buffer, filename: string, maxPreviewR
   const sheet = workbook.Sheets[sheetName]
   const raw = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: '' })
   const headerRow = raw[0] || []
-  const columnMap = mapHeaders(headerRow)
+  const columnMap = mapHeaders(headerRow, overrideMap)
 
   const headers: HeaderMatch[] = headerRow
-    .map((h, index) => ({ index, label: String(h ?? '').trim(), field: columnMap.get(index) ?? null }))
+    .map((h, index) => {
+      const label = String(h ?? '').trim()
+      const field = columnMap.get(index) ?? null
+      return { index, label, field, suggestion: field ? null : (label ? suggestField(label) : null) }
+    })
     .filter((h) => h.label !== '')
 
-  const { rows, errors } = parseExcelBuffer(buffer, filename)
+  const { rows, errors } = parseExcelBuffer(buffer, filename, overrideMap)
   return { headers, preview: rows.slice(0, maxPreviewRows), totalRows: rows.length, errors }
 }
 
@@ -169,6 +183,11 @@ function mapRowValues(values: Partial<Record<CanonicalField, unknown>>, rowNumbe
     if (n === null) throw new Error(`Salario inválido: "${values.daily_salary}"`)
     out.daily_salary = n
   }
+  if (values.monthly_salary != null) {
+    const n = parseSalary(values.monthly_salary)
+    if (n === null) throw new Error(`Salario mensual inválido: "${values.monthly_salary}"`)
+    out.monthly_salary = n
+  }
 
   if (values.department != null)    out.department    = String(values.department).trim()
   if (values.position != null)      out.position      = String(values.position).trim()
@@ -176,6 +195,10 @@ function mapRowValues(values: Partial<Record<CanonicalField, unknown>>, rowNumbe
   if (values.shift != null)         out.shift         = String(values.shift).trim()
   if (values.contract_type != null) out.contract_type = String(values.contract_type).trim()
   if (values.status != null)        out.status        = String(values.status).trim()
+  if (values.employee_code != null) out.employee_code = String(values.employee_code).trim()
+  if (values.bank_name != null)     out.bank_name     = String(values.bank_name).trim()
+  if (values.bank_clabe != null)    out.bank_clabe    = String(values.bank_clabe).trim()
+  if (values.notes != null)         out.notes         = String(values.notes).trim()
 
   if (values.hire_date != null) {
     const d = parseDate(values.hire_date)

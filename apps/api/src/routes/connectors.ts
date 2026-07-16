@@ -174,13 +174,30 @@ router.post('/preview/excel', requireHR, handlePreviewExcelUpload, async (req: R
     const file = req.file as Express.Multer.File | undefined
     if (!file) throw new AppError(400, 'No se subió ningún archivo')
 
-    const result = previewExcelBuffer(file.buffer, file.originalname)
+    // El usuario puede mandar overrides explícitos (ajustó el mapeo a mano y
+    // volvió a este paso); si no manda nada, se intenta el mapeo guardado de
+    // la última sincronización de este tenant para este tipo de fuente.
+    let overrideMap: Record<string, string> | undefined
+    let usingSavedMapping = false
+    if (typeof req.body.fieldMap === 'string' && req.body.fieldMap) {
+      try { overrideMap = JSON.parse(req.body.fieldMap) } catch { /* ignorar mapeo malformado */ }
+    }
+    if (!overrideMap) {
+      const saved = await getSavedFieldMap(req.tenant.id, FIELD_MAP_SOURCE_TYPE)
+      if (saved) { overrideMap = saved; usingSavedMapping = true }
+    }
+
+    const result = previewExcelBuffer(file.buffer, file.originalname, 5, overrideMap)
     const headers = result.headers.map((h) => ({
       ...h,
       fieldLabel: h.field ? CANONICAL_FIELD_LABELS[h.field] : null,
     }))
 
-    res.json({ fileName: file.originalname, headers, preview: result.preview, totalRows: result.totalRows, errors: result.errors })
+    // El banner de "mapeo guardado" solo tiene sentido si de verdad aplicó a
+    // algún header de ESTE archivo — un mapeo guardado de otro layout no cuenta.
+    usingSavedMapping = usingSavedMapping && headers.some((h) => h.field && overrideMap?.[h.label])
+
+    res.json({ fileName: file.originalname, headers, preview: result.preview, totalRows: result.totalRows, errors: result.errors, usingSavedMapping })
   } catch (err) {
     next(err)
   }
@@ -230,10 +247,46 @@ router.post('/preview/cfdi', requireHR, handlePreviewCfdiUpload, async (req: Req
 // ── Columnas de `employees` que estos conectores pueden escribir ─
 
 const WRITABLE_EMPLOYEE_COLUMNS: (keyof EmployeeUpsertRow)[] = [
-  'first_name', 'last_name', 'rfc', 'curp', 'nss', 'daily_salary',
+  'first_name', 'last_name', 'rfc', 'curp', 'nss', 'daily_salary', 'monthly_salary',
   'department', 'position', 'plant', 'shift', 'hire_date',
-  'contract_type', 'status', 'employee_code',
+  'contract_type', 'status', 'employee_code', 'bank_name', 'bank_clabe', 'notes',
 ]
+
+// ── Mapeo de columnas guardado por tenant + tipo de fuente ──────
+// El tipo de fuente real que produce este flujo hoy es 'EXCEL_GENERIC'
+// (ver runExcelSync) — el ejemplo del feature usaba "NOMIPAQ_EXCEL" mismo
+// que no existe como constante distinta en el código actual; se usa el
+// valor real para que el mapeo guardado efectivamente se reutilice.
+const FIELD_MAP_SOURCE_TYPE = 'EXCEL_GENERIC'
+
+function fieldMapKey(tenantId: string, sourceType: string) {
+  return `t:${tenantId}:fieldmap:${sourceType}`
+}
+
+async function getSavedFieldMap(tenantId: string, sourceType: string): Promise<Record<string, string> | null> {
+  const raw = await redis.get(fieldMapKey(tenantId, sourceType))
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    return (parsed && typeof parsed === 'object') ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+async function saveFieldMap(tenantId: string, sourceType: string, map: Record<string, string>): Promise<void> {
+  if (Object.keys(map).length === 0) return
+  await redis.set(fieldMapKey(tenantId, sourceType), JSON.stringify(map))
+}
+
+/** Construye el mapeo header-texto -> CanonicalField efectivamente usado en
+ * un preview/import, combinando lo auto-detectado con overrides — es lo que
+ * se persiste como "mapeo guardado" para la próxima subida del mismo tipo. */
+function effectiveFieldMap(headers: { label: string; field: string | null }[]): Record<string, string> {
+  const map: Record<string, string> = {}
+  for (const h of headers) if (h.field) map[h.label] = h.field
+  return map
+}
 
 const WRITABLE_PAYROLL_COLUMNS: (keyof PayrollUpsertRow)[] = [
   'folio', 'uuid_sat', 'payroll_type', 'period_start', 'period_end', 'payment_date',
@@ -270,12 +323,12 @@ interface SourceFile { buffer: Buffer; originalname: string }
 
 // ── runExcelSync ──────────────────────────────────────────────
 
-async function runExcelSync(tenantId: string, tenantDb: any, io: any, files: SourceFile[]): Promise<SyncResult> {
+async function runExcelSync(tenantId: string, tenantDb: any, io: any, files: SourceFile[], overrideMap?: Record<string, string>): Promise<SyncResult> {
   const allRows: ParsedEmployeeRow[] = []
   const rowErrors: SyncRowError[] = []
 
   for (const file of files) {
-    const { rows, errors } = parseExcelBuffer(file.buffer, file.originalname)
+    const { rows, errors } = parseExcelBuffer(file.buffer, file.originalname, overrideMap)
     allRows.push(...rows)
     for (const e of errors) rowErrors.push({ ...e, file: file.originalname })
   }
@@ -501,8 +554,25 @@ router.post('/upload/excel', requireHR, handleExcelUpload, async (req: Request, 
   if (files.length === 0) return next(new AppError(400, 'No se subió ningún archivo'))
 
   try {
-    const result = await runExcelSync(req.tenant.id, req.tenantDb, req.app.get('io'), files)
+    // El front manda el mapeo COMPLETO (auto-detectado + sugerencias
+    // aplicadas + overrides manuales) confirmado en el Step 3 del wizard —
+    // se usa tal cual para el import real, garantizando que lo que el
+    // usuario vio en el preview sea exactamente lo que se guarda (ver
+    // PART 1/4, "Sugerido: X" solo tenía efecto visual antes de esto).
+    let fieldMap: Record<string, string> | undefined
+    if (typeof req.body.fieldMap === 'string' && req.body.fieldMap) {
+      try { fieldMap = JSON.parse(req.body.fieldMap) } catch { /* ignorar mapeo malformado */ }
+    }
+    if (!fieldMap) {
+      fieldMap = (await getSavedFieldMap(req.tenant.id, FIELD_MAP_SOURCE_TYPE)) || undefined
+    }
+
+    const result = await runExcelSync(req.tenant.id, req.tenantDb, req.app.get('io'), files, fieldMap)
     await upsertConnectedSource(req.tenantDb, req.tenant.id, 'EXCEL', files)
+
+    // PART 4 — guarda el mapeo efectivamente usado para la próxima subida.
+    if (fieldMap) await saveFieldMap(req.tenant.id, FIELD_MAP_SOURCE_TYPE, fieldMap)
+
     res.json({ processed: result.processed, inserted: result.inserted, updated: result.updated, errors: result.errors, syncLogId: result.syncLogId })
   } catch (err) {
     next(err)
@@ -610,7 +680,12 @@ export async function runReloadForSource(tenantId: string, tenantDb: any, io: an
 
   try {
     let result: SyncResult
-    if (source.type === 'EXCEL')     result = await runExcelSync(tenantId, tenantDb, io, files)
+    if (source.type === 'EXCEL') {
+      // Recargas/auto-sync reusan el mapeo guardado del tenant — no hay
+      // sesión de wizard aquí para volver a preguntar.
+      const savedMap = (await getSavedFieldMap(tenantId, FIELD_MAP_SOURCE_TYPE)) || undefined
+      result = await runExcelSync(tenantId, tenantDb, io, files, savedMap)
+    }
     else if (source.type === 'CFDI') result = await runCfdiSync(tenantId, tenantDb, io, files)
     else if (source.type === 'DBF')  result = await runDbfSync(tenantId, tenantDb, io, files)
     else throw new AppError(400, `Tipo de conexión no soportado: ${source.type}`)

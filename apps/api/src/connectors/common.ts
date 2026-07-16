@@ -21,6 +21,9 @@ export interface EmployeeUpsertRow {
   contract_type?: string
   status?:        string
   employee_code?: string
+  bank_name?:     string
+  bank_clabe?:    string
+  notes?:         string
 }
 
 export interface PayrollUpsertRow {

@@ -1539,10 +1539,18 @@ const MODO_A_SYSTEMS = [
 
 const CODICE_FIELDS = [
   ["full_name", "Nombre completo"], ["rfc", "RFC"], ["curp", "CURP"], ["nss", "NSS (IMSS)"],
-  ["daily_salary", "Salario diario"], ["department", "Departamento"], ["position", "Puesto"],
+  ["employee_code", "Clave de empleado"],
+  ["daily_salary", "Salario diario"], ["monthly_salary", "Salario mensual"],
+  ["department", "Departamento"], ["position", "Puesto"],
   ["plant", "Planta"], ["shift", "Turno"], ["hire_date", "Fecha de ingreso"],
   ["contract_type", "Tipo de contrato"], ["status", "Estatus"],
+  ["bank_name", "Banco"], ["bank_clabe", "CLABE"], ["notes", "Notas"],
 ];
+
+// RFC o Clave de empleado — al menos uno debe estar mapeado para continuar
+// (si no, el import solo puede insertar filas nuevas, nunca actualizar las
+// existentes — ver upsertEmployee en routes/connectors.ts).
+const REQUIRED_IDENTIFIER_FIELDS = ["rfc", "employee_code"];
 
 // Campos de nómina — mismo Excel genérico, ahora también puede alimentar
 // payroll_records (ver connectors/excel/fieldMapper.ts:PAYROLL_FIELDS en el API).
@@ -1583,6 +1591,7 @@ function MiniDropzone({ accept, multiple, onFiles, busy, label, busyLabel }) {
 }
 
 function FieldMapperTable({ headers, manualMap, setManualMap }) {
+  const applySuggestion = (h) => setManualMap((m) => ({ ...m, [h.index]: h.suggestion.field }));
   return (
     <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
       <table className="tbl">
@@ -1591,25 +1600,36 @@ function FieldMapperTable({ headers, manualMap, setManualMap }) {
           {headers.map((h) => {
             const matched = !!h.field;
             const overridden = manualMap[h.index];
+            const suggestion = !matched && !overridden ? h.suggestion : null;
             return (
               <tr key={h.index} style={{ cursor: "default" }}>
                 <td className="mono">{h.label}</td>
                 <td>
                   {matched ? h.fieldLabel : (
-                    <select
-                      className="select" style={{ fontSize: 12, padding: "5px 8px", width: 200 }}
-                      value={overridden || ""} onChange={(e) => setManualMap((m) => ({ ...m, [h.index]: e.target.value }))}
-                    >
-                      <option value="">Sin mapear (se ignora)</option>
-                      <optgroup label="Empleados">{CODICE_FIELDS.map(([f, l]) => <option key={f} value={f}>{l}</option>)}</optgroup>
-                      <optgroup label="Nómina">{CODICE_PAYROLL_FIELDS.map(([f, l]) => <option key={f} value={f}>{l}</option>)}</optgroup>
-                    </select>
+                    <div>
+                      <select
+                        className="select" style={{ fontSize: 12, padding: "5px 8px", width: 200 }}
+                        value={overridden || ""} onChange={(e) => setManualMap((m) => ({ ...m, [h.index]: e.target.value }))}
+                      >
+                        <option value="">Sin mapear (se ignora)</option>
+                        <optgroup label="Empleados">{CODICE_FIELDS.map(([f, l]) => <option key={f} value={f}>{l}</option>)}</optgroup>
+                        <optgroup label="Nómina">{CODICE_PAYROLL_FIELDS.map(([f, l]) => <option key={f} value={f}>{l}</option>)}</optgroup>
+                      </select>
+                      {suggestion && (
+                        <div className="row" style={{ gap: 7, marginTop: 6 }}>
+                          <span className="muted2" style={{ fontSize: 11 }}>Sugerido: {suggestion.label}</span>
+                          <button className="btn btn-sm" style={{ padding: "2px 8px", fontSize: 11 }} onClick={() => applySuggestion(h)}>Aplicar sugerencia</button>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </td>
                 <td>
                   {matched
                     ? <span className="chip" style={{ color: "var(--emerald)" }}><CircleCheck size={11} />Detectado</span>
-                    : <span className="chip" style={{ color: "var(--amber)" }}><AlertTriangle size={11} />{overridden ? "Mapeado manualmente" : "Sin mapear"}</span>}
+                    : overridden
+                      ? <span className="chip" style={{ color: "var(--emerald)" }}><CircleCheck size={11} />Mapeado manualmente</span>
+                      : <span className="chip" style={{ color: "var(--amber)" }}><AlertTriangle size={11} />{suggestion ? "Sugerencia disponible" : "Sin mapear"}</span>}
                 </td>
               </tr>
             );
@@ -1632,18 +1652,42 @@ function FieldMapperStep({ preview, manualMap, setManualMap, onContinue, onBack 
   const empDetected     = preview.headers.some((h) => h.field && !PAYROLL_FIELD_KEYS.has(h.field));
   const payrollDetected = preview.headers.some((h) => h.field && PAYROLL_FIELD_KEYS.has(h.field));
 
+  const pendingSuggestions = preview.headers.filter((h) => !h.field && !manualMap[h.index] && h.suggestion);
+  const applyAllSuggestions = () => {
+    setManualMap((m) => {
+      const next = { ...m };
+      for (const h of pendingSuggestions) next[h.index] = h.suggestion.field;
+      return next;
+    });
+  };
+
+  const hasRequiredIdentifier = preview.headers.some((h) => REQUIRED_IDENTIFIER_FIELDS.includes(fieldFor(h)));
+
   return (
     <div>
       <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Mapeo de columnas</div>
       <div className="muted" style={{ fontSize: 12.5, marginBottom: 10 }}>Confirma que cada columna de tu archivo se interpretó correctamente.</div>
 
-      <div className="row" style={{ gap: 8, marginBottom: 16 }}>
-        <span className="chip" style={{ color: empDetected ? "var(--emerald)" : "var(--muted-2)" }}>
-          Campos detectados: Empleados {empDetected ? "✓" : "—"}
-        </span>
-        <span className="chip" style={{ color: payrollDetected ? "var(--emerald)" : "var(--muted-2)" }}>
-          Nómina {payrollDetected ? "✓" : "—"}
-        </span>
+      {preview.usingSavedMapping && (
+        <div className="glass-2" style={{ padding: "9px 12px", marginBottom: 14, borderLeft: "3px solid var(--emerald)" }}>
+          <span style={{ fontSize: 12, color: "var(--emerald)" }}>Usando mapeo guardado de la última sincronización ✓</span>
+        </div>
+      )}
+
+      <div className="row" style={{ gap: 8, marginBottom: 16, justifyContent: "space-between", flexWrap: "wrap" }}>
+        <div className="row" style={{ gap: 8 }}>
+          <span className="chip" style={{ color: empDetected ? "var(--emerald)" : "var(--muted-2)" }}>
+            Campos detectados: Empleados {empDetected ? "✓" : "—"}
+          </span>
+          <span className="chip" style={{ color: payrollDetected ? "var(--emerald)" : "var(--muted-2)" }}>
+            Nómina {payrollDetected ? "✓" : "—"}
+          </span>
+        </div>
+        {pendingSuggestions.length > 0 && (
+          <button className="btn btn-sm" onClick={applyAllSuggestions}>
+            <Sparkles size={12} />Aplicar todas las sugerencias ({pendingSuggestions.length})
+          </button>
+        )}
       </div>
 
       <Eyebrow>Empleados</Eyebrow>
@@ -1661,9 +1705,14 @@ function FieldMapperStep({ preview, manualMap, setManualMap, onContinue, onBack 
       )}
 
       <div className="muted2" style={{ fontSize: 11, marginTop: 10 }}>Las columnas sin mapear se ignoran al importar.</div>
+      {!hasRequiredIdentifier && (
+        <div style={{ fontSize: 12, color: "var(--rose)", marginTop: 10 }}>
+          Necesitas mapear al menos RFC o Clave de empleado para continuar
+        </div>
+      )}
       <div className="row" style={{ gap: 10, marginTop: 20, justifyContent: "flex-end" }}>
         <button className="btn" onClick={onBack}>← Atrás</button>
-        <button className="btn btn-accent" onClick={onContinue}>Continuar</button>
+        <button className="btn btn-accent" disabled={!hasRequiredIdentifier} onClick={onContinue}>Continuar</button>
       </div>
     </div>
   );
@@ -1808,7 +1857,20 @@ function ModoAWizard({ token, socket, onClose, onImported }) {
     setCommitErr(null);
     try {
       const endpoint = system.format === "cfdi" ? "/api/connectors/upload/cfdi" : "/api/connectors/upload/excel";
-      const res = await uploadConnectorFile(token, endpoint, files);
+      // Mapeo COMPLETO confirmado en el Step 3 (auto-detectado + sugerencias
+      // aplicadas + overrides manuales), por header de texto — el backend lo
+      // usa tal cual para el import real y lo guarda para la próxima subida
+      // (ver PART 1/4 del mapeo inteligente).
+      let extraFields;
+      if (isExcel && preview?.headers) {
+        const fieldMap = {};
+        for (const h of preview.headers) {
+          const field = manualMap[h.index] || h.field;
+          if (field) fieldMap[h.label] = field;
+        }
+        if (Object.keys(fieldMap).length > 0) extraFields = { fieldMap: JSON.stringify(fieldMap) };
+      }
+      const res = await uploadConnectorFile(token, endpoint, files, undefined, extraFields);
       setResult(res);
       setStep(5);
       onImported?.();
