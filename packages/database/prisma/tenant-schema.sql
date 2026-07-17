@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.employees (
   xp_level          INTEGER     DEFAULT 1,
   streak_days       INTEGER     DEFAULT 0,
   streak_last_date  DATE,
+  badges            JSONB       DEFAULT '[]',
 
   -- Metadata
   avatar_url        TEXT,
@@ -249,7 +250,14 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.attendance_records (
 
   plant           TEXT,                    -- ubicación mock, ej: "Planta Vallejo · Acceso principal"
   method          TEXT        DEFAULT 'QR',
-  -- QR | MANUAL | KIOSK | MOCK_SEED
+  -- QR | MANUAL | KIOSK | MOCK_SEED | ZKTECO_ADMS
+
+  -- Checadora biométrica (ZKTeco ADMS push) — NULL para todo lo que no
+  -- venga de un dispositivo físico. Reusa `method` para la fuente en vez
+  -- de una columna `source` separada (ver webhook/attendance/zkteco.ts).
+  verify_mode     TEXT,                    -- fingerprint | card | face
+  device_sn       TEXT,
+  mock            BOOLEAN     DEFAULT true, -- false únicamente en filas de checadora real
 
   created_at      TIMESTAMPTZ DEFAULT NOW(),
   updated_at      TIMESTAMPTZ DEFAULT NOW()
@@ -257,6 +265,27 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.attendance_records (
 
 CREATE INDEX idx_attendance_emp  ON {SCHEMA}.attendance_records (employee_id);
 CREATE INDEX idx_attendance_date ON {SCHEMA}.attendance_records (check_in_at);
+
+-- ─── ZKTECO ADMS — checadoras biométricas ─────────────────────
+-- Metadata rica por dispositivo para el admin shell (alias, ubicación,
+-- último ping). La resolución SN → tenant al recibir un push NO usa esta
+-- tabla (no se sabe a qué tenant pertenece un SN todavía) — usa la tabla
+-- global `public.zkteco_devices` (ver scripts/seedZktecoDevices.ts).
+
+CREATE TABLE IF NOT EXISTS {SCHEMA}.zkteco_devices (
+  id          TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  tenant_id   TEXT        NOT NULL,
+  sn          TEXT        NOT NULL UNIQUE,
+  alias       TEXT,
+  location    TEXT,
+  ip_address  TEXT,
+  model       TEXT        DEFAULT 'UA760',
+  last_ping   TIMESTAMPTZ,
+  status      TEXT        DEFAULT 'ACTIVE',
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_zkteco_devices_tenant ON {SCHEMA}.zkteco_devices (tenant_id);
 
 -- ─── ACTAS ADMINISTRATIVAS ────────────────────────────────────
 
@@ -374,6 +403,23 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.mentions (
 
 CREATE INDEX idx_mentions_emp  ON {SCHEMA}.mentions (employee_id);
 CREATE INDEX idx_mentions_date ON {SCHEMA}.mentions (awarded_date DESC);
+
+-- ─── XP EVENTS (gamificación) ─────────────────────────────────
+-- Historial de cada otorgamiento de XP — ver apps/api/src/lib/gamification.ts
+
+CREATE TABLE IF NOT EXISTS {SCHEMA}.xp_events (
+  id              TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  employee_id     TEXT        REFERENCES {SCHEMA}.employees(id) ON DELETE CASCADE,
+  type            TEXT        NOT NULL,
+  -- DAILY_ATTENDANCE | COURSE_COMPLETED | REQUEST_RESOLVED | RECOGNITION_RECEIVED |
+  -- STREAK_7_DAYS | STREAK_30_DAYS | STREAK_100_DAYS
+  xp_earned       INTEGER     NOT NULL,
+  description     TEXT,
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_xp_events_emp  ON {SCHEMA}.xp_events (employee_id);
+CREATE INDEX idx_xp_events_date ON {SCHEMA}.xp_events (created_at DESC);
 
 -- ─── BONUSES ─────────────────────────────────────────────────
 

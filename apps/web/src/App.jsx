@@ -33,6 +33,7 @@ import {
   fetchContractsExpiringSoon, consultAIStream,
   fetchDeptRiskProfiles, updateDeptRiskProfile, logDeptAccidente,
   fetchRadarLatest, refreshRadar, fetchRadarHistory,
+  fetchEmployeeGamification, fetchGamificationLeaderboard,
 } from "./api.js";
 
 // Credenciales de auto-login del cockpit admin (tenant único GFP). Vienen de
@@ -752,6 +753,28 @@ function usePayrollLatestMap(token) {
   return map;
 }
 
+function useEmployeeGamification(token, employeeId) {
+  const [state, setState] = useState({ status: "loading", data: null });
+  useEffect(() => {
+    if (!token || !employeeId) return;
+    fetchEmployeeGamification(token, employeeId)
+      .then((data) => setState({ status: "ready", data }))
+      .catch((e) => setState({ status: "error", data: null, error: e.message }));
+  }, [token, employeeId]);
+  return state;
+}
+
+function useGamificationLeaderboard(token, limit = 5) {
+  const [state, setState] = useState({ status: "loading", data: [] });
+  useEffect(() => {
+    if (!token) return;
+    fetchGamificationLeaderboard(token, limit)
+      .then(({ data }) => setState({ status: "ready", data: data || [] }))
+      .catch(() => setState({ status: "error", data: [] }));
+  }, [token, limit]);
+  return state;
+}
+
 function Plantilla({ staff, token, openExpediente, socket, refreshStaff, initialStatusFilter }) {
   const [q, setQ] = useState(""); const [fStatus, setFStatus] = useState(initialStatusFilter || "Todos"); const [fDepto, setFDepto] = useState("Todos");
   const [nuevo, setNuevo] = useState(false);
@@ -1124,7 +1147,46 @@ function NominaTab({ e, token }) {
   );
 }
 
-function ResumenTab({ e, setStatus, update }) {
+function GamificationSummaryCard({ token, employeeId }) {
+  const gam = useEmployeeGamification(token, employeeId);
+  if (gam.status === "loading") return null;
+  if (gam.status === "error" || !gam.data) return null;
+  const g = gam.data;
+  const unlocked = (g.badges || []).filter((b) => b.unlocked);
+
+  return (
+    <div className="glass-2" style={{ padding: 14, marginBottom: 18 }}>
+      <Eyebrow>Gamificación</Eyebrow>
+      <div className="row" style={{ justifyContent: "space-between", marginTop: 9 }}>
+        <div style={{ fontSize: 14, fontWeight: 700 }}>Nivel {g.xp_level} · {g.level_label}</div>
+        <span className="chip" style={{ color: "var(--amber)" }}>🔥 {g.streak_days} días</span>
+      </div>
+      <div className="muted2" style={{ fontSize: 11.5, marginTop: 4 }}>{g.xp_total} XP acumulados</div>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+        {unlocked.length === 0
+          ? <span className="muted2" style={{ fontSize: 11.5 }}>Sin logros desbloqueados todavía.</span>
+          : unlocked.map((b) => <span key={b.id} className="chip">{b.emoji} {b.label}</span>)}
+      </div>
+
+      {(g.recent_events || []).length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <Eyebrow>Últimos eventos XP</Eyebrow>
+          <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 6 }}>
+            {g.recent_events.slice(0, 5).map((ev, i) => (
+              <div key={i} className="row" style={{ justifyContent: "space-between", fontSize: 11.5 }}>
+                <span className="muted">{ev.description || ev.type}</span>
+                <span className="mono" style={{ color: "var(--emerald)", flexShrink: 0, marginLeft: 8 }}>+{ev.xp_earned} XP</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ResumenTab({ e, setStatus, update, token }) {
   const dv = diasVacaciones(e.antiguedad); const sd = e.salario / 30;
   return (
     <>
@@ -1137,6 +1199,7 @@ function ResumenTab({ e, setStatus, update }) {
       </div>
       <Eyebrow>Tipo de contrato</Eyebrow>
       <select className="select" style={{ margin: "9px 0 18px" }} value={e.contrato} onChange={(ev) => update({ contrato: ev.target.value })}>{CONTRATOS.map((c) => <option key={c}>{c}</option>)}</select>
+      <GamificationSummaryCard token={token} employeeId={e.dbId} />
       <div className="glass-2" style={{ padding: 14 }}>
         <Eyebrow>Derechos LFT estimados</Eyebrow>
         <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 9, fontSize: 12.5 }}>
@@ -1443,7 +1506,7 @@ function ProfileDrawer({ e, onClose, setStatus, update, token, initialTab }) {
           </span>
           <span className={`tabbtn ${tab === "nomina" ? "on" : ""}`} onClick={() => setTab("nomina")}><DollarSign size={12} />Nómina</span>
         </div>
-        {tab === "resumen" && <ResumenTab e={e} setStatus={setStatus} update={update} />}
+        {tab === "resumen" && <ResumenTab e={e} setStatus={setStatus} update={update} token={token} />}
         {tab === "salud" && <SaludTab e={e} token={token} health={health} />}
         {tab === "nomina" && <NominaTab e={e} token={token} />}
       </div></>
@@ -3844,7 +3907,38 @@ function IndicadoresWKF({ staff, token, openExpediente }) {
         </table>
       </div>
 
+      <Eyebrow>Gamificación</Eyebrow>
+      <h2 style={{ fontSize: 16, fontWeight: 700, margin: "6px 0 12px" }}>Top colaboradores · XP</h2>
+      <GamificationLeaderboardWidget token={token} staff={staff} openExpediente={openExpediente} />
+
       <RiesgoSalud staff={staff} token={token} openExpediente={openExpediente} />
+    </div>
+  );
+}
+
+function GamificationLeaderboardWidget({ token, staff, openExpediente }) {
+  const board = useGamificationLeaderboard(token, 5);
+  const staffByDbId = useMemo(() => Object.fromEntries(staff.map((s) => [s.dbId, s])), [staff]);
+
+  return (
+    <div className="glass" style={{ padding: 0, overflow: "hidden", marginBottom: 16 }}>
+      <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", fontWeight: 600, fontSize: 13 }}>Top 5 colaboradores por XP</div>
+      <table className="tbl">
+        <thead><tr><th>#</th><th>Colaborador</th><th>Nivel</th><th style={{ textAlign: "right" }}>XP</th><th style={{ textAlign: "right" }}>Racha</th></tr></thead>
+        <tbody>
+          {board.data.length === 0 ? (
+            <tr style={{ cursor: "default" }}><td colSpan={5} className="muted" style={{ padding: 18 }}>Sin datos de gamificación todavía.</td></tr>
+          ) : board.data.map((row, i) => (
+            <tr key={row.id} onClick={() => openExpediente?.(staffByDbId[row.id], "resumen")}>
+              <td className="mono muted2">{i + 1}</td>
+              <td style={{ fontWeight: 500 }}>{row.firstName} {row.lastName}</td>
+              <td className="muted">Nivel {row.xpLevel} · {row.levelLabel}</td>
+              <td className="mono" style={{ textAlign: "right", fontWeight: 600, color: "var(--emerald)" }}>{row.xpTotal}</td>
+              <td className="mono muted2" style={{ textAlign: "right" }}>🔥 {row.streakDays}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

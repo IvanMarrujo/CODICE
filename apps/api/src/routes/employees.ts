@@ -11,6 +11,7 @@ import { Prisma } from '@prisma/client'
 import { requireHR, requireEmployee } from '../middleware/auth'
 import { AppError } from '../lib/errors'
 import { paginationQuerySchema, resolvePageSize, paginationMeta } from '../lib/pagination'
+import { calculateLevel, unlockedCourses, BADGES } from '../lib/gamification'
 
 const router = Router()
 
@@ -244,12 +245,90 @@ router.get('/team', requireEmployee, async (req: Request, res: Response, next: N
   }
 })
 
+// ── GET /api/employees/leaderboard ───────────────────────────
+// "/leaderboard" debe montarse ANTES que "/:id" — un solo segmento,
+// matchearía contra el parámetro (mismo gotcha que "/team" y
+// "/status-summary" arriba).
+
+router.get('/leaderboard', requireHR, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tenantId = req.tenant.id
+    const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 5))
+
+    const rows = await req.tenantDb.$queryRaw<any[]>`
+      SELECT id, first_name, last_name, department, avatar_url, xp_points, xp_level, streak_days
+      FROM employees
+      WHERE tenant_id = ${tenantId} AND status = 'Activo'
+      ORDER BY xp_points DESC
+      LIMIT ${limit}
+    `
+
+    const data = rows.map((r: any) => ({
+      id:          r.id,
+      firstName:   r.first_name,
+      lastName:    r.last_name,
+      department:  r.department,
+      photoUrl:    r.avatar_url || null,
+      initials:    initialsFor(r.first_name, r.last_name),
+      avatarColor: avatarColorFor(`${r.first_name} ${r.last_name}`),
+      xpTotal:     r.xp_points,
+      xpLevel:     r.xp_level,
+      levelLabel:  calculateLevel(r.xp_points).label,
+      streakDays:  r.streak_days,
+    }))
+
+    res.json({ data })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // ── GET /api/employees/:id ───────────────────────────────────
 
 router.get('/:id', requireHR, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const employee = await findEmployeeOr404(req.tenantDb, req.tenant.id, req.params.id)
     res.json(employee)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── GET /api/employees/:id/gamification ──────────────────────
+// El propio colaborador ve su progreso; RH puede consultar el de
+// cualquiera (Expediente → tab Perfil).
+
+router.get('/:id/gamification', requireEmployee, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tenantId = req.tenant.id
+    const targetId = req.params.id
+    if (req.jwt.role === 'EMPLOYEE' && req.jwt.sub !== targetId) {
+      throw new AppError(403, 'No puedes ver la gamificación de otro colaborador')
+    }
+
+    const employee = await findEmployeeOr404(req.tenantDb, tenantId, targetId)
+    const { label, xpToNext, progressPct } = calculateLevel(employee.xp_points)
+    const earnedBadges: string[] = Array.isArray(employee.badges) ? employee.badges : []
+
+    const recentEvents = await req.tenantDb.$queryRaw<any[]>`
+      SELECT type, xp_earned, description, created_at
+      FROM xp_events
+      WHERE employee_id = ${targetId}
+      ORDER BY created_at DESC
+      LIMIT 10
+    `
+
+    res.json({
+      xp_total:           employee.xp_points,
+      xp_level:           employee.xp_level,
+      level_label:        label,
+      streak_days:        employee.streak_days,
+      badges:             BADGES.map((b) => ({ ...b, unlocked: earnedBadges.includes(b.id) })),
+      xp_to_next_level:   xpToNext,
+      progress_pct:       progressPct,
+      recent_events:      recentEvents,
+      unlocked_courses:   unlockedCourses(employee.xp_level),
+    })
   } catch (err) {
     next(err)
   }

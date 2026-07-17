@@ -11,6 +11,7 @@ import { requireManager, requireEmployee } from '../middleware/auth'
 import { AppError } from '../lib/errors'
 import { notifyHR } from '../lib/whatsapp'
 import { paginationQuerySchema, resolvePageSize, paginationMeta } from '../lib/pagination'
+import { awardXP } from '../lib/gamification'
 
 const router = Router()
 
@@ -204,6 +205,8 @@ router.patch('/:id/approve', requireManager, async (req: Request, res: Response,
     emitRequestUpdated(req, tenantId, request)
 
     if (notifType === 'REQUEST_APPROVED') {
+      await awardXP(tenantDb, tenantId, request.employee_id, 'REQUEST_RESOLVED', `Solicitud aprobada: ${requestLabel(request.type)}`)
+
       employeeFullName(tenantDb, tenantId, request.employee_id).then((fullName) => {
         notifyHR(tenantId, 'solicitudes', `✅ CÓDICE · Solicitud aprobada\n👤 ${fullName}\n📋 ${request.type} · Folio: ${folioFor(request.id)}`)
       }) // fire-and-forget — nunca await (ver PART 3)

@@ -13,6 +13,10 @@ import {
 let _empToast = () => {};
 const empToast = (msg, kind = "info") => _empToast(msg, kind);
 
+/* ---------- bus de "xp:earned" (mismo patrón que empToast) ---------- */
+let _empXpFlash = () => {};
+const empXpFlash = (payload) => _empXpFlash(payload);
+
 /* ============================================================
    CÓDICE · Shell Colaborador — Fortune 500 redesign
    Solo colaboradores. IA = árbol guiado (sin chat libre).
@@ -593,6 +597,33 @@ body{font-family:'DM Sans',system-ui,-apple-system,"Segoe UI",sans-serif}
 .emp-badge.rejected{color:var(--accent-red);background:rgba(239,68,68,.14);border-color:rgba(239,68,68,.3)}
 .emp-badge.cancelled{color:var(--text-muted);background:rgba(74,96,128,.14);border-color:rgba(74,96,128,.3)}
 
+/* ---------- gamificación: nivel/racha/logros ---------- */
+.emp-progress-track{width:100%;height:8px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden}
+.emp-progress-fill{height:100%;border-radius:999px;transition:width .8s cubic-bezier(.22,1,.36,1)}
+.emp-progress-fill-xp{background:linear-gradient(90deg,#00c896,#4db8ff)}
+.emp-progress-fill-racha{background:#f5c518}
+
+.emp-badges-scroll{display:flex;gap:10px;overflow-x:auto;margin-top:10px;padding-bottom:2px;-webkit-overflow-scrolling:touch}
+.emp-badge-card{flex:0 0 80px;height:96px;border-radius:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+  padding:8px 6px;text-align:center;border:1px solid var(--border-dim);background:var(--surface-2)}
+.emp-badge-card.unlocked{border-color:rgba(0,200,150,.35);background:var(--accent-green-dim)}
+.emp-badge-card-emoji{font-size:24px;line-height:1}
+.emp-badge-card-label{font-size:11px;font-weight:600;color:var(--text-primary)}
+.emp-badge-card-label.muted{color:var(--text-muted)}
+.emp-badge-card-status{font-size:9.5px;font-weight:700;color:var(--accent-green);text-transform:uppercase;letter-spacing:.04em}
+
+.emp-xpflash-wrap{position:fixed;top:100px;left:50%;transform:translateX(-50%);z-index:60;pointer-events:none;
+  display:flex;flex-direction:column;align-items:center}
+.emp-xpflash{font-weight:700;font-size:18px;color:var(--accent-green);text-shadow:0 0 12px rgba(0,200,150,.5)}
+
+.emp-badgeflash-overlay{position:fixed;inset:0;z-index:70;background:rgba(2,9,23,.72);backdrop-filter:blur(6px);
+  display:flex;align-items:center;justify-content:center}
+.emp-badgeflash-card{width:220px;padding:28px 20px;border-radius:20px;text-align:center;
+  background:var(--surface-1);border:1px solid rgba(0,200,150,.4);box-shadow:0 0 40px rgba(0,200,150,.35)}
+.emp-badgeflash-emoji{font-size:48px;line-height:1;margin-bottom:12px}
+.emp-badgeflash-title{font-size:12px;color:var(--text-secondary);margin-bottom:4px}
+.emp-badgeflash-name{font-size:18px;font-weight:700;color:var(--accent-green)}
+
 .emp-folio{padding:18px;border-radius:16px;border:1px dashed rgba(16,185,129,.4);background:var(--accent-green-dim);text-align:center;position:relative;overflow:hidden}
 .emp-folio-perf{height:6px;margin:14px -18px -18px;background-image:radial-gradient(circle,rgba(2,9,23,.9) 2.5px,transparent 2.6px);background-size:12px 12px;background-position:top}
 
@@ -957,13 +988,188 @@ function BottomSheet({ title, onClose, children }) {
   );
 }
 
+// ── GAMIFICACIÓN — nivel, racha, logros ─────────────────────
+// Espejo ligero de LEVELS/BADGES en apps/api/src/lib/gamification.ts —
+// solo para mostrar etiquetas humanas, la fuente de verdad es el backend.
+
+const LEVEL_UNLOCK_LABEL = {
+  2: "el curso básico",
+  3: "el logro Constante 💪",
+  4: "el curso avanzado",
+  5: "el logro Élite 👑",
+};
+
+const STREAK_MILESTONES = [7, 30, 100];
+const STREAK_BONUS_XP = { 7: 25, 30: 100, 100: 500 };
+
+const BADGE_META = {
+  puntual:   { emoji: "🎯", label: "Puntual" },
+  aprendiz:  { emoji: "📚", label: "Aprendiz" },
+  constante: { emoji: "💪", label: "Constante" },
+  destacado: { emoji: "⭐", label: "Destacado" },
+  elite:     { emoji: "👑", label: "Élite" },
+};
+
+function XpLevelCard({ data }) {
+  const [pct, setPct] = useState(0);
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setPct(data.progress_pct ?? 0));
+    return () => cancelAnimationFrame(raf);
+  }, [data.progress_pct]);
+
+  const nextLevel = data.xp_level < 5 ? data.xp_level + 1 : null;
+  const nextLevelMinXp = nextLevel ? data.xp_total + data.xp_to_next_level : null;
+  const nextUnlock = nextLevel ? LEVEL_UNLOCK_LABEL[nextLevel] : null;
+  const maxXp = nextLevel ? nextLevelMinXp : data.xp_total;
+
+  return (
+    <div className="emp-glass emp-card">
+      <div className="emp-row" style={{ justifyContent: "space-between" }}>
+        <Eyebrow>Nivel XP</Eyebrow>
+        <span className="mono emp-muted" style={{ fontSize: 11.5 }}>{data.xp_total} / {maxXp} XP</span>
+      </div>
+      <div style={{ fontSize: 15, fontWeight: 600, margin: "4px 0 10px" }}>Nivel {data.xp_level} · {data.level_label}</div>
+      <div className="emp-progress-track">
+        <div className="emp-progress-fill emp-progress-fill-xp" style={{ width: `${pct}%` }} />
+      </div>
+      <div className="emp-muted" style={{ fontSize: 11.5, marginTop: 10, lineHeight: 1.5 }}>
+        💡 Ganas 10 XP cada día sin faltas.
+        {nextUnlock && ` Al llegar a ${nextLevelMinXp} XP desbloqueas ${nextUnlock}.`}
+      </div>
+    </div>
+  );
+}
+
+function RachaCard({ data }) {
+  const [pct, setPct] = useState(0);
+  const nextMilestone = STREAK_MILESTONES.find((m) => m > data.streak_days) ?? null;
+  const prevMilestone = nextMilestone ? (STREAK_MILESTONES[STREAK_MILESTONES.indexOf(nextMilestone) - 1] ?? 0) : 100;
+  const target = nextMilestone
+    ? Math.min(100, Math.max(0, ((data.streak_days - prevMilestone) / (nextMilestone - prevMilestone)) * 100))
+    : 100;
+
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setPct(target));
+    return () => cancelAnimationFrame(raf);
+  }, [target]);
+
+  return (
+    <div className="emp-glass emp-card">
+      <Eyebrow>Racha</Eyebrow>
+      <div style={{ fontSize: 15, fontWeight: 600, margin: "4px 0 10px" }}>{data.streak_days} día{data.streak_days === 1 ? "" : "s"} seguidos</div>
+      <div className="emp-progress-track">
+        <div className="emp-progress-fill emp-progress-fill-racha" style={{ width: `${pct}%` }} />
+      </div>
+      <div className="emp-muted" style={{ fontSize: 11.5, marginTop: 10, lineHeight: 1.5 }}>
+        {nextMilestone
+          ? `Próximo hito: ${nextMilestone} días (${nextMilestone - data.streak_days} más)`
+          : "🏆 Ya alcanzaste el hito máximo de racha"}
+        <br />
+        💡 Días seguidos sin faltas ni retardos.
+        {nextMilestone && ` A los ${nextMilestone} días: ${STREAK_BONUS_XP[nextMilestone]} XP de bono.`}
+      </div>
+    </div>
+  );
+}
+
+function BadgesSection({ badges }) {
+  return (
+    <div className="emp-glass emp-card">
+      <Eyebrow>Mis logros</Eyebrow>
+      {(!badges || badges.length === 0) ? (
+        <div className="emp-muted" style={{ fontSize: 12, marginTop: 10 }}>
+          Completa días sin faltas para desbloquear logros.
+        </div>
+      ) : (
+        <div className="emp-badges-scroll">
+          {badges.map((b) => (
+            <div key={b.id} className={`emp-badge-card ${b.unlocked ? "unlocked" : "locked"}`}>
+              {b.unlocked ? (
+                <>
+                  <div className="emp-badge-card-emoji">{b.emoji}</div>
+                  <div className="emp-badge-card-label">{b.label}</div>
+                  <div className="emp-badge-card-status">Desbloqueado</div>
+                </>
+              ) : (
+                <>
+                  <Lock size={20} color="var(--text-muted)" />
+                  <div className="emp-badge-card-label muted">{b.label}</div>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function XpFlashHost() {
+  const [flashes, setFlashes] = useState([]);
+  const [badgeFlash, setBadgeFlash] = useState(null);
+
+  useEffect(() => {
+    _empXpFlash = ({ xp, newBadge }) => {
+      const id = Math.random();
+      setFlashes((f) => [...f, { id, xp }]);
+      setTimeout(() => setFlashes((f) => f.filter((x) => x.id !== id)), 1500);
+
+      const badge = newBadge ? BADGE_META[newBadge] : null;
+      if (badge) {
+        setBadgeFlash(badge);
+        setTimeout(() => setBadgeFlash(null), 2600);
+      }
+    };
+    return () => { _empXpFlash = () => {}; };
+  }, []);
+
+  return (
+    <>
+      <div className="emp-xpflash-wrap">
+        <AnimatePresence>
+          {flashes.map((f) => (
+            <motion.div
+              key={f.id}
+              className="mono emp-xpflash"
+              initial={{ opacity: 0, y: 0 }}
+              animate={{ opacity: [0, 1, 1, 0], y: -60, transition: { duration: 1.5, times: [0, 0.15, 0.7, 1], ease: "easeOut" } }}
+              exit={{ opacity: 0 }}
+            >
+              +{f.xp} XP
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
+      <AnimatePresence>
+        {badgeFlash && (
+          <motion.div className="emp-badgeflash-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <motion.div
+              className="emp-badgeflash-card"
+              initial={{ scale: 0.6, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.8, opacity: 0 }}
+              transition={{ type: "spring", stiffness: 260, damping: 20 }}
+            >
+              <div className="emp-badgeflash-emoji">{badgeFlash.emoji}</div>
+              <div className="emp-badgeflash-title">¡Nuevo logro desbloqueado!</div>
+              <div className="emp-badgeflash-name">{badgeFlash.label}</div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
+  );
+}
+
 // ── HOME ─────────────────────────────────────────────────────
 
-function HomeView({ token, employee, unreadCount, onGoAvisos, onGoRecibos, onOpenTeam, refreshKey }) {
+function HomeView({ token, employee, unreadCount, onGoAvisos, onGoRecibos, onOpenTeam, refreshKey, gamificationRefreshKey }) {
   const payroll = useLatestPayroll(token, employee.id, refreshKey);
   const p = payroll.data;
   const attendance = useTodayAttendance(token, employee.id);
   const a = attendance.data;
+  const gamification = useGamification(token, employee.id, gamificationRefreshKey);
+  const g = gamification.data;
 
   // Cuenta hacia el nuevo neto cuando payroll:updated dispara un refetch —
   // en la primera carga se muestra directo, sin animación.
@@ -1038,8 +1244,9 @@ function HomeView({ token, employee, unreadCount, onGoAvisos, onGoRecibos, onOpe
       <Eyebrow>Hola de nuevo</Eyebrow>
       <div className="emp-h1">¡Hola, {employee.first_name}!</div>
 
-      <StatCard label="Nivel XP" value={employee.xp_level ?? 1} icon={Award} sub={`${employee.xp_points ?? 0} XP acumulados`} accent="green" />
-      <StatCard label="Racha" value={employee.streak_days ?? 0} icon={Flame} sub="días seguidos" accent="amber" />
+      {g ? <XpLevelCard data={g} /> : <StatCard label="Nivel XP" value={employee.xp_level ?? 1} icon={Award} sub={`${employee.xp_points ?? 0} XP acumulados`} accent="green" />}
+      {g ? <RachaCard data={g} /> : <StatCard label="Racha" value={employee.streak_days ?? 0} icon={Flame} sub="días seguidos" accent="amber" />}
+      {g && <BadgesSection badges={g.badges} />}
 
       <div className="emp-glass emp-card">
         <div className="emp-row" style={{ justifyContent: "space-between" }}>
@@ -1574,6 +1781,21 @@ function useLatestPayroll(token, employeeId, refreshKey) {
     try {
       const res = await apiFetch(token, `/api/payroll?employeeId=${employeeId}&pageSize=1`);
       setState({ status: "ready", data: res.data[0] || null });
+    } catch {
+      setState({ status: "error", data: null });
+    }
+  }, [token, employeeId]);
+  useEffect(() => { reload(); }, [reload, refreshKey]);
+  return { ...state, reload };
+}
+
+// Nivel/racha/logros — ver GET /api/employees/:id/gamification (apps/api/src/lib/gamification.ts).
+function useGamification(token, employeeId, refreshKey) {
+  const [state, setState] = useState({ status: "loading", data: null });
+  const reload = useCallback(async () => {
+    try {
+      const res = await apiFetch(token, `/api/employees/${employeeId}/gamification`);
+      setState({ status: "ready", data: res });
     } catch {
       setState({ status: "error", data: null });
     }
@@ -2299,6 +2521,7 @@ export default function EmpleadoShell() {
   const [showGreet, setShowGreet] = useState(true);
   const [iaLocked, setIaLocked] = useState(false);
   const [payrollRefreshKey, setPayrollRefreshKey] = useState(0);
+  const [gamificationRefreshKey, setGamificationRefreshKey] = useState(0);
   const [teamGraphOpen, setTeamGraphOpen] = useState(false);
   const socketRef = useRef(null);
 
@@ -2329,6 +2552,11 @@ export default function EmpleadoShell() {
       } else {
         empToast(`↓ Tu recibo cambió $${Math.abs(delta).toFixed(2)}`, "warning");
       }
+    });
+    // Gamificación — ver awardXP en apps/api/src/lib/gamification.ts.
+    socket.on("xp:earned", (payload) => {
+      setGamificationRefreshKey((k) => k + 1);
+      empXpFlash(payload);
     });
     return () => { socket.disconnect(); socketRef.current = null; };
   }, [employee?.id]);
@@ -2384,6 +2612,7 @@ export default function EmpleadoShell() {
       <div className="emp-bgwash" />
       <canvas ref={canvasRef} className="emp-canvas" />
       <EmpToastHost />
+      <XpFlashHost />
 
       {stage === "login" && <LoginScreen onSuccess={loadEmployeeData} />}
       {stage === "booting" && <LoadingScreen text="Cargando tu información…" />}
@@ -2407,7 +2636,7 @@ export default function EmpleadoShell() {
 
           <main className="emp-main">
             <AnimatePresence mode="wait">
-              {view === "home" && <div key="home"><HomeView token={token} employee={employee} unreadCount={unreadCount} onGoAvisos={() => openModule("avisos")} onGoRecibos={() => openModule("recibos")} onOpenTeam={() => setTeamGraphOpen(true)} refreshKey={payrollRefreshKey} /></div>}
+              {view === "home" && <div key="home"><HomeView token={token} employee={employee} unreadCount={unreadCount} onGoAvisos={() => openModule("avisos")} onGoRecibos={() => openModule("recibos")} onOpenTeam={() => setTeamGraphOpen(true)} refreshKey={payrollRefreshKey} gamificationRefreshKey={gamificationRefreshKey} /></div>}
               {view === "recibos" && <div key="recibos"><RecibosView token={token} employee={employee} onOpen={() => pulse("#3b82f6")} refreshKey={payrollRefreshKey} /></div>}
               {view === "vacaciones" && <div key="vacaciones"><VacacionesView token={token} employee={employee} onSuccess={success} /></div>}
               {view === "solicitudes" && <div key="solicitudes"><SolicitudesView token={token} employee={employee} onSuccess={success} /></div>}

@@ -93,6 +93,14 @@ export function fetchPayrollExplain(token, recordId) {
   return authedFetch(token, `/api/payroll/${recordId}/explain`);
 }
 
+export function fetchEmployeeGamification(token, employeeId) {
+  return authedFetch(token, `/api/employees/${employeeId}/gamification`);
+}
+
+export function fetchGamificationLeaderboard(token, limit = 5) {
+  return authedFetch(token, `/api/employees/leaderboard?limit=${limit}`);
+}
+
 export function fetchSyncLogHistory(token) {
   return authedFetch(token, `/api/connectors/sync-log/history`);
 }

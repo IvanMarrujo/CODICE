@@ -44,7 +44,11 @@ import { startDailyCourseDigest } from './jobs/dailyCourseDigest'
 import deptRiskRoutes from './routes/deptRisk'
 import radarRoutes from './routes/radar'
 import newsRoutes from './routes/news'
+import mentionRoutes from './routes/mentions'
 import { startRadarWeekly } from './jobs/radarWeekly'
+import { startGamificationDaily } from './jobs/gamificationDaily'
+import zktecoWebhookRoutes from './routes/zktecoWebhook'
+import deviceRoutes from './routes/devices'
 
 const PORT = process.env.API_PORT || 3001
 
@@ -99,6 +103,9 @@ app.use('/api/webhook', webhookRoutes) // el agente se autentica con HMAC propio
 // El mensaje entrante de WhatsApp no trae un JWT nuestro; /whatsapp/simulate
 // (mismo router) aplica requireHR internamente sobre esa única ruta.
 app.use('/api/webhook', whatsappWebhookRoutes)
+// Checadora ZKTeco (ADMS push) — el dispositivo no manda JWT, resuelve el
+// tenant por número de serie (ver routes/zktecoWebhook.ts).
+app.use('/api/webhook', zktecoWebhookRoutes)
 
 // ── Authenticated routes ─────────────────────────────────────
 // Orden: rateLimiter → JWT auth → tenant resolver → route handler
@@ -129,6 +136,8 @@ app.use('/api/settings',   settingsRoutes)
 app.use('/api/risk',       deptRiskRoutes)
 app.use('/api/radar',      radarRoutes)
 app.use('/api/news',       newsRoutes)
+app.use('/api/devices',    deviceRoutes)
+app.use('/api/mentions',   mentionRoutes)
 
 // Auspex (solo SUPER_ADMIN)
 app.use('/api/auspex', auspexRoutes)
@@ -156,6 +165,9 @@ startAutoSyncWorker(io, runReloadForSource)
 
 // ── Digest diario 8am — cursos obligatorios pendientes ───────
 startDailyCourseDigest()
+
+// ── Gamificación diaria 23:55 — asistencia, racha, XP ────────
+startGamificationDaily()
 
 // ── Start ────────────────────────────────────────────────────
 server.listen(PORT, () => {

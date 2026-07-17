@@ -11,6 +11,7 @@ import { requireHR } from '../middleware/auth'
 import { AppError }  from '../lib/errors'
 import { htmlToPdf } from '../lib/pdf'
 import { savePdf }   from '../lib/storage'
+import { awardXP }   from '../lib/gamification'
 
 const router = Router()
 
@@ -152,6 +153,8 @@ router.post('/:courseId/constancia/:employeeId', requireHR, async (req: Request,
         expires_at     = EXCLUDED.expires_at,
         constancia_url = EXCLUDED.constancia_url
     `
+
+    await awardXP(tenantDb, tenantId, employeeId, 'COURSE_COMPLETED', `Curso completado: ${course.title}`)
 
     res.json({ constanciaUrl })
   } catch (err) {
