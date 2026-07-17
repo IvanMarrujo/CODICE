@@ -21,7 +21,7 @@ import * as crypto from 'crypto'
 import { AgentConfig, SourceConfig } from './index'
 import { AgentWSClient } from './wsClient'
 import { DiffEngine, Delta } from './diffEngine'
-import { parseWorkbook } from './excelParser'
+import { parseWorkbook, ParsedRow } from './excelParser'
 import { sendSync } from './uploader'
 
 const FULL_SYNC_THRESHOLD = 50
@@ -65,7 +65,14 @@ function resolveFiles(source: SourceConfig): string[] {
 // — un mismo Excel de nómina trae ambos tipos de columna en la misma fila
 // (ej. STATUS junto con ISR/PERCEPCIONES), pero el servidor los aplica a
 // tablas distintas (ver lib/agentDelta.ts).
-function splitDelta(delta: Delta): { employee?: Delta; payroll?: Delta } {
+// Campos que identifican el recibo de nómina a actualizar (ver
+// upsertPayrollRecord en apps/api/src/routes/connectors.ts) pero que no
+// necesariamente cambiaron en este delta — sin ellos, un update parcial
+// (ej. solo ISR) no puede hacer match contra el recibo existente y el
+// servidor termina insertando uno nuevo en vez de actualizarlo.
+const PAYROLL_IDENTITY_FIELDS = ['uuid_sat', 'period_start', 'period_end', 'period_label', 'payment_date']
+
+function splitDelta(delta: Delta, currentRow?: ParsedRow): { employee?: Delta; payroll?: Delta } {
   if (delta.type === 'delete') {
     // El servidor ignora las bajas por delta a propósito (ver agentDelta.ts)
     // — se manda de todos modos para que quede constancia en delta:applied.
@@ -91,9 +98,19 @@ function splitDelta(delta: Delta): { employee?: Delta; payroll?: Delta } {
     if (EMPLOYEE_FIELDS.has(field)) employeeChanges![field] = change
     if (PAYROLL_FIELDS.has(field))  payrollChanges![field] = change
   }
+
+  const payrollContext: Record<string, unknown> = {}
+  if (currentRow) {
+    for (const field of PAYROLL_IDENTITY_FIELDS) {
+      if (currentRow[field] !== undefined && !payrollChanges![field]) payrollContext[field] = currentRow[field]
+    }
+  }
+
   return {
     employee: Object.keys(employeeChanges!).length ? { code: delta.code, type: 'update', changes: employeeChanges } : undefined,
-    payroll:  Object.keys(payrollChanges!).length  ? { code: delta.code, type: 'update', changes: payrollChanges }  : undefined,
+    payroll:  Object.keys(payrollChanges!).length
+      ? { code: delta.code, type: 'update', changes: payrollChanges, context: Object.keys(payrollContext).length ? payrollContext : undefined }
+      : undefined,
   }
 }
 
@@ -156,6 +173,18 @@ async function handleDebouncedChange(
 async function handleExcelChange(source: SourceConfig, wsClient: AgentWSClient, diffEngine: DiffEngine, changedPath: string) {
   if (!fs.existsSync(source.watchPath)) return
 
+  // Si no hay conexión, sendDelta()/sendFullSync() serían no-ops silenciosos
+  // — sin este guard, diffEngine.updateState() de todos modos marcaría el
+  // cambio como "ya sincronizado" más abajo, y se perdería para siempre (el
+  // reconnect-resync en index.ts/simulate.ts nunca lo detectaría porque el
+  // estado ya coincidiría con el archivo). Se sale ANTES de tocar el estado,
+  // así el próximo cambio de archivo — o el resync automático al reconectar —
+  // sigue viendo el delta pendiente.
+  if (!wsClient.isReady()) {
+    console.log(`[watcher] EXCEL: sin conexión — "${changedPath}" se sincronizará al reconectar`)
+    return
+  }
+
   const rows = parseWorkbook(source.watchPath)
   const deltas = diffEngine.computeDeltas(rows)
 
@@ -178,7 +207,8 @@ async function handleExcelChange(source: SourceConfig, wsClient: AgentWSClient, 
   const employeeDeltas: Delta[] = []
   const payrollDeltas:  Delta[] = []
   for (const delta of deltas) {
-    const split = splitDelta(delta)
+    const currentRow = rows.find((r) => (r.employee_code || r.rfc) === delta.code)
+    const split = splitDelta(delta, currentRow)
     if (split.employee) employeeDeltas.push(split.employee)
     if (split.payroll)  payrollDeltas.push(split.payroll)
   }
@@ -192,6 +222,22 @@ async function handleExcelChange(source: SourceConfig, wsClient: AgentWSClient, 
 
   diffEngine.updateState(rows)
   console.log(`[watcher] EXCEL: Detected ${deltas.length} changes · sent via WebSocket`)
+}
+
+// Se llama en cada auth_ok (primera conexión y cada reconexión) — atrapa
+// cualquier cambio que haya quedado pendiente mientras el agente estuvo
+// desconectado (chokidar no vuelve a emitir 'change' solo porque el socket
+// se reconectó, así que sin esto ese cambio se quedaría sin mandar hasta el
+// siguiente guardado real del archivo).
+export async function resyncExcelSources(config: AgentConfig, wsClient: AgentWSClient, diffEngine: DiffEngine): Promise<void> {
+  for (const source of config.sources) {
+    if (!source.enabled || source.type !== 'EXCEL') continue
+    try {
+      await handleExcelChange(source, wsClient, diffEngine, '(resync tras conexión)')
+    } catch (err: any) {
+      console.error(`[watcher] EXCEL: error en resync —`, err.message)
+    }
+  }
 }
 
 async function handleDbfChange(config: AgentConfig, source: SourceConfig, state: DbfState, changedPath: string) {

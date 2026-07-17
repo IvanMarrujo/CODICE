@@ -16,3 +16,6 @@ codice-scaffold/
 codice-scaffold.zip
 .vercel/
 .claude/scheduled_tasks.lock
+packages/agent/agent-state.json
+packages/agent/agent-dbf-state.json
+packages/agent/watch/

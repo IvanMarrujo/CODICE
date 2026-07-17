@@ -8,7 +8,7 @@
 
 import * as fs   from 'fs'
 import * as path from 'path'
-import { startWatchers } from './watcher'
+import { startWatchers, resyncExcelSources } from './watcher'
 import { AgentWSClient } from './wsClient'
 import { DiffEngine } from './diffEngine'
 
@@ -50,9 +50,17 @@ function main() {
   printBanner(config)
 
   const diffEngine = new DiffEngine()
+  let watchersStarted = false
   const wsClient = new AgentWSClient(config, () => {
     console.log('  Estado: CONECTADO\n')
-    startWatchers(config, wsClient, diffEngine)
+    // startWatchers solo la primera vez — auth_ok también dispara en cada
+    // reconexión, y volver a registrar los mismos watchers de chokidar
+    // duplicaría cada envío subsecuente (uno por cada registro acumulado).
+    if (!watchersStarted) {
+      watchersStarted = true
+      startWatchers(config, wsClient, diffEngine)
+    }
+    void resyncExcelSources(config, wsClient, diffEngine)
   })
   wsClient.connect()
   // Keep-alive: los watchers de chokidar y el socket abierto ya mantienen

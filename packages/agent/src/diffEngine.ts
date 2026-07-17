@@ -15,6 +15,11 @@ export interface Delta {
   type?: 'insert' | 'update' | 'delete'
   data?: Record<string, unknown>
   changes?: Record<string, { from: unknown; to: unknown }>
+  // Campos de identidad que no cambiaron pero el servidor necesita para
+  // encontrar el registro a actualizar (ver watcher.ts::splitDelta y
+  // apps/api/src/lib/agentDelta.ts) — deliberadamente NO es la fila
+  // completa, para no perder el ahorro de ancho de banda de mandar deltas.
+  context?: Record<string, unknown>
 }
 
 const STATE_PATH = path.join(__dirname, '..', 'agent-state.json')

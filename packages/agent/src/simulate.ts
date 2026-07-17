@@ -10,7 +10,7 @@ import * as fs   from 'fs'
 import * as path from 'path'
 import * as XLSX from 'xlsx'
 import { loadConfig, printBanner } from './index'
-import { startWatchers } from './watcher'
+import { startWatchers, resyncExcelSources } from './watcher'
 import { AgentWSClient } from './wsClient'
 import { DiffEngine } from './diffEngine'
 
@@ -49,11 +49,16 @@ function main() {
   }
 
   const diffEngine = new DiffEngine()
+  let watchersStarted = false
   const wsClient = new AgentWSClient(config, () => {
     console.log('  Estado: CONECTADO\n')
-    console.log('[simulate] edita el archivo de ejemplo y guarda — el cambio se sube solo (solo el delta).\n')
-    console.log('[Esperando cambios...]\n')
-    startWatchers(config, wsClient, diffEngine)
+    if (!watchersStarted) {
+      watchersStarted = true
+      console.log('[simulate] edita el archivo de ejemplo y guarda — el cambio se sube solo (solo el delta).\n')
+      console.log('[Esperando cambios...]\n')
+      startWatchers(config, wsClient, diffEngine)
+    }
+    void resyncExcelSources(config, wsClient, diffEngine)
   })
   wsClient.connect()
 }

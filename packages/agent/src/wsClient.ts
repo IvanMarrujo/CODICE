@@ -49,7 +49,7 @@ export class AgentWSClient {
     this.ws.on('open', () => this.authenticate())
     this.ws.on('message', (data) => this.onMessage(data))
     this.ws.on('close', () => this.onClose())
-    this.ws.on('error', (err: Error) => console.error('[CÓDICE] Error de conexión:', err.message))
+    this.ws.on('error', (err: Error) => console.error('[CÓDICE] Error de conexión:', err?.message || err))
   }
 
   isReady(): boolean {

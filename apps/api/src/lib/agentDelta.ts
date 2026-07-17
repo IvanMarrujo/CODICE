@@ -22,6 +22,13 @@ export interface AgentDelta {
   type?: 'insert' | 'update' | 'delete'
   data?: Record<string, unknown>
   changes?: Record<string, { from: unknown; to: unknown }>
+  // Campos de identidad (period_label/payment_date/uuid_sat…) que NO cambiaron
+  // pero que upsertPayrollRecord necesita para encontrar el recibo existente —
+  // un delta de "update" solo trae los campos que sí cambiaron en `changes`,
+  // así que sin esto un update de, digamos, solo ISR no puede hacer match
+  // contra el recibo previo y termina insertando uno nuevo en vez de
+  // actualizarlo. Ver packages/agent/src/watcher.ts::splitDelta.
+  context?: Record<string, unknown>
 }
 
 export interface ApplyDeltaResult {
@@ -62,7 +69,10 @@ function fieldsFromDelta(
   const source: Record<string, unknown> =
     delta.type === 'insert'
       ? (delta.data || {})
-      : Object.fromEntries(Object.entries(delta.changes || {}).map(([k, v]) => [k, v.to]))
+      : {
+          ...(delta.context || {}),
+          ...Object.fromEntries(Object.entries(delta.changes || {}).map(([k, v]) => [k, v.to])),
+        }
 
   const out: Record<string, unknown> = {}
   for (const field of whitelist) {
