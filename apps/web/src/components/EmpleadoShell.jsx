@@ -682,13 +682,27 @@ body{font-family:'DM Sans',system-ui,-apple-system,"Segoe UI",sans-serif}
 .team-graph-more{position:absolute;bottom:28px;left:50%;transform:translateX(-50%);z-index:2;
   font-size:11.5px;font-weight:600;color:var(--text-muted);background:var(--surface-2);border:1px solid var(--border-dim);
   border-radius:999px;padding:5px 12px}
-.team-graph-popup{position:absolute;z-index:3;transform:translate(-50%,-100%) translateY(-16px);
-  width:168px;padding:14px;border-radius:14px;text-align:center;pointer-events:none;
-  background:var(--surface-1);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
-  border:1px solid var(--border-glow);box-shadow:0 12px 34px -10px rgba(0,0,10,.7)}
-.team-graph-popup-avatar{width:48px;height:48px;border-radius:50%;margin:0 auto;display:flex;align-items:center;justify-content:center;
-  font-weight:700;font-size:16px;color:#04060a;overflow:hidden}
-.team-graph-popup-avatar img{width:100%;height:100%;object-fit:cover}
+.team-graph-bgglow{position:absolute;inset:0;z-index:1;pointer-events:none;
+  background:radial-gradient(circle at 50% 50%, rgba(0,200,150,.04) 0%, transparent 70%)}
+
+.team-graph-centertip{position:absolute;z-index:3;transform:translate(-50%,-100%) translateY(-30px);
+  pointer-events:none;font-size:12px;font-weight:600;color:var(--text-primary);white-space:nowrap;
+  background:rgba(2,9,23,.6);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  border:1px solid rgba(0,200,150,.35);border-radius:999px;padding:6px 14px;
+  box-shadow:0 0 12px rgba(0,200,150,.3)}
+
+.team-graph-expand{position:absolute;z-index:3;transform-origin:center center;translate:-50% -50%;
+  pointer-events:none;width:36px;height:36px;border-radius:50%;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:2px;
+  background:rgba(255,255,255,.08);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.15);
+  box-shadow:0 0 16px rgba(var(--avatar-glow,77,184,255),.5), inset 0 0 0 1px rgba(var(--avatar-glow,77,184,255),.25)}
+.team-graph-expand-avatar{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-weight:700;font-size:11px;color:#04060a;background:var(--avatar-color,#4db8ff);overflow:hidden;flex:none}
+.team-graph-expand-avatar img{width:100%;height:100%;object-fit:cover}
+.team-graph-expand-name{font-size:6.5px;font-weight:700;color:var(--text-primary);white-space:nowrap;max-width:56px;overflow:hidden;text-overflow:ellipsis}
+.team-graph-expand-pos{font-size:5.5px;color:var(--text-secondary);white-space:nowrap;max-width:56px;overflow:hidden;text-overflow:ellipsis}
+.team-graph-expand-meta{font-size:5px;color:var(--text-muted);white-space:nowrap;max-width:56px;overflow:hidden;text-overflow:ellipsis}
 `;
 
 // ── transiciones — editorial: crossfade puro, sin spring ni desplazamiento ──
@@ -1825,38 +1839,86 @@ function seededRng(seedStr) {
   };
 }
 
+// admite "#rrggbb" y "rgb(r,g,b)"; cualquier otra cosa cae al azul por defecto
+function avatarRgb(color) {
+  if (!color) return "77,184,255";
+  const hex = /^#([0-9a-f]{6})$/i.exec(color.trim());
+  if (hex) {
+    const v = hex[1];
+    return `${parseInt(v.slice(0, 2), 16)},${parseInt(v.slice(2, 4), 16)},${parseInt(v.slice(4, 6), 16)}`;
+  }
+  const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(color.trim());
+  if (rgb) return `${rgb[1]},${rgb[2]},${rgb[3]}`;
+  return "77,184,255";
+}
+
 const TEAM_NODE_R = 18;
 const TEAM_CENTER_R = 24;
 const TEAM_ORBIT_MIN = 100;
 const TEAM_ORBIT_MAX = 170;
+const TEAM_EXPAND_SCALE = 1.8;
+const TEAM_ANIM_TC = 0.13; // constante de tiempo del suavizado ≈ converge en ~300ms
+
+function makeDust(rng, baseR) {
+  const count = 3 + Math.floor(rng() * 3); // 3–5 puntas
+  const dust = [];
+  for (let i = 0; i < count; i++) {
+    dust.push({
+      angle: rng() * Math.PI * 2,
+      dist: baseR * (1.3 + rng() * 0.9),
+      size: 1 + rng() * 1,
+      sx: 0.12 + rng() * 0.18,
+      sy: 0.1 + rng() * 0.18,
+      phaseX: rng() * Math.PI * 2,
+      phaseY: rng() * Math.PI * 2,
+      driftX: 4 + rng() * 5,
+      driftY: 4 + rng() * 5,
+      pulseSpeed: 0.25 + rng() * 0.3,
+      phase: rng() * Math.PI * 2,
+    });
+  }
+  return dust;
+}
 
 class TeamGraphField {
-  constructor(canvas, { center, teammates, onHoverChange }) {
+  constructor(canvas, { center, teammates, onSelectChange }) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d");
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);
     this.center = center;
     this.teammates = teammates;
-    this.onHoverChange = onHoverChange;
+    this.onSelectChange = onSelectChange;
     this.hoverIdx = -1;
-    this.selectedIdx = -1; // tap-to-pin en móvil
-    this.mouse = null;
+    this.selectedIdx = -1; // nodo compañero expandido (click)
+    this.centerSelected = false; // "Tú" tocado (solo pulso + tooltip)
+    this.centerPulseAt = 0;
     this.images = new Map();
     this.clock0 = performance.now();
+    this.lastFrame = this.clock0;
+    this.centerDust = makeDust(seededRng(`${center.id}-dust`), TEAM_CENTER_R);
 
     this._layout();
 
     this._onMove = (e) => {
       const rect = this.canvas.getBoundingClientRect();
-      this.mouse = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-      if (this.selectedIdx < 0) this._setHover(this._nodeAt(this.mouse.x, this.mouse.y));
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      this.hoverIdx = this.selectedIdx < 0 ? this._nodeAt(mx, my) : this.selectedIdx;
     };
-    this._onLeave = () => { this.mouse = null; if (this.selectedIdx < 0) this._setHover(-1); };
+    this._onLeave = () => { if (this.selectedIdx < 0) this.hoverIdx = -1; };
     this._onClick = (e) => {
       const rect = this.canvas.getBoundingClientRect();
-      const idx = this._nodeAt(e.clientX - rect.left, e.clientY - rect.top);
+      const x = e.clientX - rect.left, y = e.clientY - rect.top;
+      if (Math.hypot(this.cx - x, this.cy - y) < TEAM_CENTER_R + 10) {
+        this.selectedIdx = -1;
+        this.centerSelected = !this.centerSelected;
+        if (this.centerSelected) this.centerPulseAt = performance.now();
+        this._emitSelection();
+        return;
+      }
+      const idx = this._nodeAt(x, y);
+      this.centerSelected = false;
       this.selectedIdx = idx === this.selectedIdx ? -1 : idx;
-      this._setHover(this.selectedIdx);
+      this._emitSelection();
     };
     canvas.addEventListener("pointermove", this._onMove);
     canvas.addEventListener("pointerleave", this._onLeave);
@@ -1872,7 +1934,12 @@ class TeamGraphField {
       const baseAngle = (i / Math.max(1, n)) * Math.PI * 2 - Math.PI / 2;
       const angle = baseAngle + (rng() - 0.5) * (Math.PI / Math.max(1, n)) * 0.7;
       const radius = TEAM_ORBIT_MIN + rng() * (TEAM_ORBIT_MAX - TEAM_ORBIT_MIN);
-      const node = { ...t, angle, radius, driftPhase: rng() * Math.PI * 2, driftSpeed: 0.12 + rng() * 0.1, x: 0, y: 0 };
+      const node = {
+        ...t, angle, radius,
+        driftPhase: rng() * Math.PI * 2, driftSpeed: 0.12 + rng() * 0.1,
+        x: 0, y: 0, scale: 1, dim: 1,
+        dust: makeDust(rng, TEAM_NODE_R),
+      };
       if (t.photoUrl && !this.images.has(t.id)) {
         const img = new Image();
         img.crossOrigin = "anonymous";
@@ -1885,15 +1952,21 @@ class TeamGraphField {
 
   _nodeAt(x, y) {
     for (let i = 0; i < this.nodes.length; i++) {
-      if (Math.hypot(this.nodes[i].x - x, this.nodes[i].y - y) < TEAM_NODE_R + 8) return i;
+      const hitR = (i === this.selectedIdx ? TEAM_NODE_R * TEAM_EXPAND_SCALE : TEAM_NODE_R) + 8;
+      if (Math.hypot(this.nodes[i].x - x, this.nodes[i].y - y) < hitR) return i;
     }
     return -1;
   }
 
-  _setHover(idx) {
-    if (idx === this.hoverIdx) return;
-    this.hoverIdx = idx;
-    this.onHoverChange(idx >= 0 ? { node: this.nodes[idx], x: this.nodes[idx].x, y: this.nodes[idx].y } : null);
+  _emitSelection() {
+    if (this.selectedIdx >= 0) {
+      const n = this.nodes[this.selectedIdx];
+      this.onSelectChange({ type: "teammate", node: n, x: n.x, y: n.y });
+    } else if (this.centerSelected) {
+      this.onSelectChange({ type: "center", x: this.cx, y: this.cy });
+    } else {
+      this.onSelectChange(null);
+    }
   }
 
   resize() {
@@ -1908,86 +1981,152 @@ class TeamGraphField {
   draw() {
     const now = performance.now();
     const t = (now - this.clock0) / 1000;
+    const dt = Math.min(0.05, (now - this.lastFrame) / 1000);
+    this.lastFrame = now;
+    const k = 1 - Math.pow(0.02, dt / TEAM_ANIM_TC); // suavizado exponencial ~300ms
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.w, this.h);
 
-    for (const n of this.nodes) {
+    const anySelected = this.selectedIdx >= 0;
+    for (let i = 0; i < this.nodes.length; i++) {
+      const n = this.nodes[i];
       const dx = Math.sin(t * n.driftSpeed + n.driftPhase) * 7;
       const dy = Math.cos(t * n.driftSpeed * 0.85 + n.driftPhase) * 7;
       n.x = this.cx + Math.cos(n.angle) * n.radius + dx;
       n.y = this.cy + Math.sin(n.angle) * n.radius * 0.78 + dy;
+      const targetScale = i === this.selectedIdx ? TEAM_EXPAND_SCALE : 1;
+      const targetDim = anySelected && i !== this.selectedIdx ? 0.4 : 1;
+      n.scale += (targetScale - n.scale) * k;
+      n.dim += (targetDim - n.dim) * k;
     }
-    // reposiciona el nodo bajo hover/selección si aplica (coords ya actualizadas arriba)
-    if (this.hoverIdx >= 0) this.onHoverChange({ node: this.nodes[this.hoverIdx], x: this.nodes[this.hoverIdx].x, y: this.nodes[this.hoverIdx].y });
+    if (this.selectedIdx >= 0 || this.centerSelected) this._emitSelection();
 
     // líneas centro -> compañero, según regla de turno/planta
-    for (const n of this.nodes) {
+    for (let i = 0; i < this.nodes.length; i++) {
+      const n = this.nodes[i];
       const sameShift = n.shift && this.center.shift && n.shift === this.center.shift;
       const samePlantOnly = !sameShift && n.plant && this.center.plant && n.plant === this.center.plant;
       if (!sameShift && !samePlantOnly) continue;
+
+      const rgbTo = avatarRgb(n.avatarColor);
+      const pulse = 0.2 + (Math.sin(t * (Math.PI * 2 / 3) + n.driftPhase) * 0.5 + 0.5) * 0.3; // 0.2→0.5→0.2, período 3s
+      const baseAlpha = sameShift ? pulse : 0.2;
+      const alpha = i === this.selectedIdx ? 0.8 : baseAlpha;
+      const dim = anySelected && i !== this.selectedIdx ? 0.4 : 1;
+
+      const grad = ctx.createLinearGradient(this.cx, this.cy, n.x, n.y);
+      grad.addColorStop(0, "rgba(0,200,150,0.6)");
+      grad.addColorStop(1, `rgba(${rgbTo},0.6)`);
+
+      ctx.save();
+      ctx.globalAlpha = alpha * dim;
       ctx.beginPath();
       ctx.moveTo(this.cx, this.cy);
       ctx.lineTo(n.x, n.y);
-      if (sameShift) {
-        const pulse = 0.22 + Math.sin(t * 1.6 + n.driftPhase) * 0.08;
-        ctx.setLineDash([]);
-        ctx.strokeStyle = `rgba(0,200,150,${pulse})`;
-        ctx.lineWidth = 1.2;
-      } else {
-        ctx.setLineDash([4, 4]);
-        ctx.strokeStyle = "rgba(255,255,255,.15)";
-        ctx.lineWidth = 1;
-      }
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = 0.8;
+      ctx.shadowColor = `rgba(${rgbTo},0.6)`;
+      ctx.shadowBlur = 4;
+      ctx.setLineDash(samePlantOnly ? [4, 4] : []);
       ctx.stroke();
-      ctx.setLineDash([]);
+      ctx.restore();
     }
 
-    this._drawNode(this.cx, this.cy, TEAM_CENTER_R, this.center, false, true);
+    this._drawDust(this.cx, this.cy, "0,200,150", this.centerDust, t, 1);
+    this._drawNode(this.cx, this.cy, TEAM_CENTER_R, this.center, { isCenter: true, pulse: this.centerSelected, pulseAt: this.centerPulseAt, now });
     for (let i = 0; i < this.nodes.length; i++) {
-      this._drawNode(this.nodes[i].x, this.nodes[i].y, TEAM_NODE_R, this.nodes[i], this.hoverIdx === i, false);
+      const n = this.nodes[i];
+      this._drawDust(n.x, n.y, avatarRgb(n.avatarColor), n.dust, t, n.dim);
+      this._drawNode(n.x, n.y, TEAM_NODE_R, n, { isHover: this.hoverIdx === i, scale: n.scale, dim: n.dim, expanded: i === this.selectedIdx });
     }
   }
 
-  _drawNode(x, y, baseR, data, isHover, isCenter) {
+  _drawDust(x, y, rgb, dust, t, dim) {
     const ctx = this.ctx;
-    const r = isHover ? baseR * 1.2 : baseR;
+    ctx.save();
+    for (const d of dust) {
+      const dx = Math.sin(t * d.sx + d.phaseX) * d.driftX;
+      const dy = Math.cos(t * d.sy + d.phaseY) * d.driftY;
+      const px = x + Math.cos(d.angle) * d.dist + dx;
+      const py = y + Math.sin(d.angle) * d.dist + dy;
+      const alpha = (0.3 + (Math.sin(t * d.pulseSpeed + d.phase) * 0.5 + 0.5) * 0.3) * dim;
+      ctx.beginPath();
+      ctx.fillStyle = `rgba(${rgb},${alpha})`;
+      ctx.arc(px, py, d.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  _drawNode(x, y, baseR, data, opts) {
+    const { isCenter = false, isHover = false, scale = 1, dim = 1, expanded = false, pulse = false, pulseAt = 0, now = 0 } = opts;
+    const ctx = this.ctx;
+    const r = baseR * (isCenter ? 1 : scale) * (isHover && scale <= 1 ? 1.08 : 1);
+    const rgb = isCenter ? "0,200,150" : avatarRgb(data.avatarColor);
     const img = this.images.get(data.id);
 
     ctx.save();
+    ctx.globalAlpha = dim;
+
+    if (pulse) {
+      const elapsed = ((now - pulseAt) / 1000) % 1.1;
+      const ringR = baseR + elapsed * 22;
+      ctx.beginPath();
+      ctx.arc(x, y, ringR, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(0,200,150,${Math.max(0, 0.5 - elapsed * 0.45)})`;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
+    // base de vidrio: fondo translúcido + halo de color
+    ctx.shadowColor = `rgba(${rgb},${expanded ? 0.6 : (isHover ? 0.45 : 0.3)})`;
+    ctx.shadowBlur = isCenter ? 14 : (expanded ? 16 : 8);
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.closePath();
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.clip();
     if (img && img.complete && img.naturalWidth > 0) {
-      ctx.save();
-      ctx.clip();
       ctx.drawImage(img, x - r, y - r, r * 2, r * 2);
-      ctx.restore();
     } else {
-      ctx.fillStyle = isCenter ? "#00c896" : (data.avatarColor || "#4db8ff");
-      ctx.fill();
-      ctx.fillStyle = "#04060a";
-      ctx.font = `700 ${Math.round(r * 0.68)}px 'DM Sans', sans-serif`;
+      ctx.fillStyle = `rgba(${rgb},0.22)`;
+      ctx.fillRect(x - r, y - r, r * 2, r * 2);
+      ctx.fillStyle = isCenter ? "#00e0b0" : (data.avatarColor || "#4db8ff");
+      ctx.font = `700 ${Math.round(r * 0.62)}px 'DM Sans', system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(data.initials || "", x, y + 1);
     }
-    ctx.lineWidth = isCenter ? 3 : 2;
-    ctx.strokeStyle = isCenter ? "#00c896" : (isHover ? "#ffffff" : "rgba(255,255,255,.25)");
+    ctx.restore();
+
+    ctx.save();
+    ctx.globalAlpha = dim;
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.lineWidth = isCenter ? 3 : (expanded ? 2.4 : 1.4);
+    ctx.strokeStyle = isCenter ? "rgba(0,200,150,0.9)" : `rgba(${rgb},${expanded ? 0.9 : 0.5})`;
     ctx.stroke();
     ctx.restore();
 
-    ctx.fillStyle = "rgba(232,240,254,.9)";
-    ctx.font = "600 11.5px 'DM Sans', sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(isCenter ? "Tú" : (data.firstName || ""), x, y + r + 15);
+    if (scale <= 1.05) {
+      ctx.save();
+      ctx.globalAlpha = dim;
+      ctx.fillStyle = "rgba(232,240,254,.9)";
+      ctx.font = "600 11.5px 'DM Sans', system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(isCenter ? "Tú" : (data.firstName || ""), x, y + r + 15);
 
-    if (!isCenter && data.position) {
-      ctx.fillStyle = "rgba(232,240,254,.45)";
-      ctx.font = "400 10px 'DM Sans', sans-serif";
-      const label = data.position.length > 15 ? `${data.position.slice(0, 14)}…` : data.position;
-      ctx.fillText(label, x, y + r + 27);
+      if (!isCenter && data.position) {
+        ctx.fillStyle = "rgba(232,240,254,.45)";
+        ctx.font = "400 10px 'DM Sans', system-ui, sans-serif";
+        const label = data.position.length > 18 ? `${data.position.slice(0, 17)}…` : data.position;
+        ctx.fillText(label, x, y + r + 27);
+      }
+      ctx.restore();
     }
   }
 
@@ -1998,11 +2137,11 @@ class TeamGraphField {
   }
 }
 
-function useTeamGraphField(canvasRef, center, teammates, onHoverChange) {
+function useTeamGraphField(canvasRef, center, teammates, onSelectChange) {
   const fieldRef = useRef(null);
   useEffect(() => {
     if (!canvasRef.current || !center) return undefined;
-    const field = new TeamGraphField(canvasRef.current, { center, teammates, onHoverChange });
+    const field = new TeamGraphField(canvasRef.current, { center, teammates, onSelectChange });
     fieldRef.current = field;
     let raf;
     const loop = () => { field.draw(); raf = requestAnimationFrame(loop); };
@@ -2018,7 +2157,7 @@ function useTeamGraphField(canvasRef, center, teammates, onHoverChange) {
 function TeamGraphView({ token, employee, onClose }) {
   const canvasRef = useRef(null);
   const [team, setTeam] = useState({ status: "loading", employees: [] });
-  const [hover, setHover] = useState(null);
+  const [selection, setSelection] = useState(null);
 
   useEffect(() => {
     if (!employee?.department) { setTeam({ status: "error", employees: [] }); return; }
@@ -2034,14 +2173,16 @@ function TeamGraphView({ token, employee, onClose }) {
     id: employee.id,
     shift: employee.shift,
     plant: employee.plant,
+    fullName: `${employee.first_name || ""} ${employee.last_name || ""}`.trim(),
     initials: `${(employee.first_name || "?")[0] || ""}${(employee.last_name || "")[0] || ""}`.toUpperCase(),
   } : null), [employee]);
 
-  const onHoverChange = useCallback((h) => setHover(h), []);
-  useTeamGraphField(canvasRef, team.status === "ready" ? center : null, visible, onHoverChange);
+  const onSelectChange = useCallback((s) => setSelection(s), []);
+  useTeamGraphField(canvasRef, team.status === "ready" ? center : null, visible, onSelectChange);
 
   return (
     <motion.div className="team-graph-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1, transition: { duration: 0.25 } }} exit={{ opacity: 0, transition: { duration: 0.2 } }}>
+      <div className="team-graph-bgglow" />
       <canvas ref={canvasRef} className="team-graph-canvas" />
 
       <div className="team-graph-back" onClick={onClose}><ChevronLeft size={18} />Regresar</div>
@@ -2057,17 +2198,35 @@ function TeamGraphView({ token, employee, onClose }) {
 
       {extraCount > 0 && <div className="team-graph-more">+{extraCount} más</div>}
 
-      {hover && (
-        <div className="team-graph-popup" style={{ left: hover.x, top: hover.y }}>
-          <div className="team-graph-popup-avatar" style={{ background: hover.node.avatarColor || "#4db8ff" }}>
-            {hover.node.photoUrl ? <img src={hover.node.photoUrl} alt="" /> : hover.node.initials}
-          </div>
-          <div style={{ fontWeight: 700, fontSize: 13, marginTop: 8 }}>{hover.node.firstName} {hover.node.lastName}</div>
-          <div className="emp-muted" style={{ fontSize: 11.5, marginTop: 2 }}>{hover.node.position || "—"}</div>
-          <div className="emp-muted" style={{ fontSize: 11, marginTop: 4 }}>Turno {hover.node.shift || "—"}</div>
-          <div className="emp-muted" style={{ fontSize: 11 }}>{hover.node.plant || "—"}</div>
+      {selection?.type === "center" && (
+        <div className="team-graph-centertip" style={{ left: selection.x, top: selection.y }}>
+          Tú · {center.fullName}
         </div>
       )}
+
+      <AnimatePresence>
+        {selection?.type === "teammate" && (
+          <motion.div
+            key={selection.node.id}
+            className="team-graph-expand"
+            style={{
+              left: selection.x, top: selection.y,
+              "--avatar-color": selection.node.avatarColor || "#4db8ff",
+              "--avatar-glow": avatarRgb(selection.node.avatarColor),
+            }}
+            initial={{ scale: 1, opacity: 0 }}
+            animate={{ scale: 1.8, opacity: 1, transition: { duration: 0.3, ease: [0, 0, 0.2, 1] } }}
+            exit={{ scale: 1, opacity: 0, transition: { duration: 0.3, ease: [0.4, 0, 1, 1] } }}
+          >
+            <div className="team-graph-expand-avatar">
+              {selection.node.photoUrl ? <img src={selection.node.photoUrl} alt="" /> : selection.node.initials}
+            </div>
+            <div className="team-graph-expand-name">{selection.node.firstName} {selection.node.lastName}</div>
+            <div className="team-graph-expand-pos">{selection.node.position || "—"}</div>
+            <div className="team-graph-expand-meta">Turno {selection.node.shift || "—"} · {selection.node.plant || "—"}</div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }
