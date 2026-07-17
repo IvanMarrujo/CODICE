@@ -16,6 +16,7 @@ import { Router, Request, Response, NextFunction } from 'express'
 import Anthropic from '@anthropic-ai/sdk'
 import { requireHR } from '../middleware/auth'
 import { redis } from '../lib/redis'
+import { examFrequencyMonths } from '../data/occupational-risk-kb'
 
 const router = Router()
 
@@ -95,6 +96,27 @@ function edadAntiguedadPts(age: number | null, antiguedad: number): number {
   return Math.min(100, pts)
 }
 
+// ── Cruce con perfil de riesgo por departamento (CÓDICE Radar) ────
+
+function normalizeCondition(s: string): string {
+  return s.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').replace(/_/g, ' ').trim()
+}
+
+function matchesIncompatibleCondition(declared: unknown[], incompatibles: string[]): boolean {
+  if (!incompatibles.length || !declared.length) return false
+  const normDeclared = declared.filter((d): d is string => typeof d === 'string').map(normalizeCondition)
+  const normIncomp = incompatibles.map(normalizeCondition)
+  return normIncomp.some((inc) => normDeclared.some((d) => d.includes(inc) || inc.includes(d)))
+}
+
+function monthsSince(dateStr: string | Date | null | undefined): number | null {
+  if (!dateStr) return null
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return null
+  const now = new Date()
+  return (now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth())
+}
+
 const WEIGHTS = { ausentismo: 0.4, incapacidad: 0.3, condiciones: 0.2, edad: 0.1 }
 
 function levelFor(score: number): 'BAJO' | 'MEDIO' | 'ALTO' {
@@ -145,14 +167,29 @@ async function computeRiskSummary(tenantDb: any, tenantId: string) {
     GROUP BY employee_id
   `
   const healthRows = await tenantDb.$queryRaw<any[]>`
-    SELECT employee_id, condiciones_declaradas, documentos
+    SELECT employee_id, condiciones_declaradas, documentos, fecha_ultimo_examen
     FROM health_profiles
     WHERE tenant_id = ${tenantId}
   `
+  // CÓDICE Radar — perfil de riesgo por departamento (Part 6: hace el
+  // score dept-específico en vez de genérico). Sin fila para un depto ==
+  // sin ajuste (mismo resultado que antes de este feature).
+  // Tolerante a que la tabla todavía no exista en este tenant (deploy antes
+  // de correr el backfill/seed) — degrada al comportamiento pre-Radar en
+  // vez de tumbar /risk-summary, que ya tiene tráfico real.
+  const deptProfileRows = await tenantDb.$queryRaw<any[]>`
+    SELECT department, perfil_optimo, historial_accidentes
+    FROM department_risk_profiles
+    WHERE tenant_id = ${tenantId}
+  `.catch((err: any) => {
+    console.error('⚠️  department_risk_profiles no disponible todavía (¿falta el backfill?):', err.message)
+    return [] as any[]
+  })
 
   const ausentismoMap  = new Map<string, number>(ausentismoRows.map((r: any) => [r.employee_id, r.n]))
   const incapacidadMap = new Map<string, number>(incapacidadRows.map((r: any) => [r.employee_id, r.n]))
   const healthMap      = new Map<string, any>(healthRows.map((r: any) => [r.employee_id, r]))
+  const deptProfileMap = new Map<string, any>(deptProfileRows.map((r: any) => [r.department, r]))
 
   const results: EmployeeRisk[] = employees.map((e: any) => {
     const ausN   = ausentismoMap.get(e.id) ?? 0
@@ -166,14 +203,28 @@ async function computeRiskSummary(tenantDb: any, tenantId: string) {
     const age = ageFromCurp(e.curp)
     const antiguedad = antiguedadYears(e.hire_date)
 
+    const deptProfile = deptProfileMap.get(e.department)
+    const perfilOptimo = deptProfile?.perfil_optimo ?? {}
+    const condicionesIncompatibles: string[] = perfilOptimo.condicionesIncompatibles ?? []
+    const incompatibleMatch = matchesIncompatibleCondition(condiciones, condicionesIncompatibles)
+    const mesesDesdeExamen = monthsSince(health?.fecha_ultimo_examen)
+    const examOverdue = mesesDesdeExamen != null && mesesDesdeExamen > examFrequencyMonths(perfilOptimo.examenRequerido)
+    const accidentesRecientesDept = (deptProfile?.historial_accidentes ?? []).filter((a: any) => {
+      const m = monthsSince(a.fecha)
+      return m != null && m <= 6
+    }).length
+
     const pAus  = ausentismoPts(ausN)
     const pInc  = incapacidadPts(incapN)
     const pCond = condicionesPts(condiciones.length, urgente)
     const pEdad = edadAntiguedadPts(age, antiguedad)
 
-    const score = Math.round(
+    let score = Math.round(
       pAus * WEIGHTS.ausentismo + pInc * WEIGHTS.incapacidad + pCond * WEIGHTS.condiciones + pEdad * WEIGHTS.edad
     )
+    if (incompatibleMatch) score += 40
+    if (examOverdue) score += 20
+    score = Math.min(100, score)
     const level = levelFor(score)
 
     const factors: string[] = []
@@ -181,8 +232,11 @@ async function computeRiskSummary(tenantDb: any, tenantId: string) {
     if (incapN > 0) factors.push(`${incapN} incapacidad${incapN === 1 ? '' : 'es'} IMSS`)
     if (urgente) factors.push('hallazgo médico urgente')
     else if (condiciones.length > 0) factors.push(`${condiciones.length} ${condiciones.length === 1 ? 'condición declarada' : 'condiciones declaradas'}`)
+    if (incompatibleMatch) factors.push('condición incompatible con puesto')
+    if (examOverdue) factors.push('examen vencido')
     if (age != null && age > 50) factors.push(`${age} años`)
     if (antiguedad > 15) factors.push(`${antiguedad} años de antigüedad`)
+    if (accidentesRecientesDept > 0) factors.push(`${accidentesRecientesDept} accidente${accidentesRecientesDept === 1 ? '' : 's'} reciente${accidentesRecientesDept === 1 ? '' : 's'} en el depto.`)
 
     return {
       employeeId: e.id,

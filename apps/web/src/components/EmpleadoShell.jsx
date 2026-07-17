@@ -1467,23 +1467,60 @@ const AVISOS_PLACEHOLDER = [
   },
 ];
 
-function AvisosView() {
+// CÓDICE Radar publica avisos ALTA vía GET /api/news (ver lib/news.ts en el
+// API) — se combinan con los estáticos de arriba. `urgency` en esos items es
+// 'alta'|'media'|'baja' (no un color CSS como en AVISOS_PLACEHOLDER), así que
+// se traduce aquí en el merge.
+const RADAR_NEWS_COLOR = { alta: 'var(--accent-red)', media: 'var(--accent-amber)', baja: 'var(--accent-blue-bright)' };
+
+function useNews(token) {
+  const [items, setItems] = useState([]);
+  useEffect(() => {
+    if (!token) return;
+    apiFetch(token, '/api/news')
+      .then((d) => setItems((d.items || []).map((n) => ({
+        id: n.id,
+        urgency: RADAR_NEWS_COLOR[n.urgency] || RADAR_NEWS_COLOR.baja,
+        nuevo: (Date.now() - new Date(n.createdAt).getTime()) < 24 * 3600 * 1000,
+        title: n.title,
+        summary: n.summary,
+        date: n.createdAt,
+        isRadar: true,
+        tag: n.tag,
+        url: n.url,
+      }))))
+      .catch(() => {});
+  }, [token]);
+  return items;
+}
+
+function AvisosView({ token }) {
   const [openId, setOpenId] = useState(null);
+  const radarItems = useNews(token);
+  const avisos = useMemo(
+    () => [...radarItems, ...AVISOS_PLACEHOLDER].sort((a, b) => new Date(b.date) - new Date(a.date)),
+    [radarItems]
+  );
   return (
     <motion.div {...PAGE_FADE}>
       <Eyebrow>Avisos</Eyebrow>
       <div className="emp-h1">Comunicados de la empresa</div>
-      {AVISOS_PLACEHOLDER.map((a, index) => {
+      {avisos.map((a, index) => {
         const isOpen = openId === a.id;
         return (
-          <motion.div key={a.id} className="emp-glass emp-card" style={{ cursor: "pointer" }} onClick={() => setOpenId(isOpen ? null : a.id)} {...cardAppear(index)}>
+          <motion.div
+            key={a.id} className="emp-glass emp-card"
+            style={{ cursor: "pointer", ...(a.isRadar ? { borderLeft: `3px solid ${a.urgency}` } : {}) }}
+            onClick={() => setOpenId(isOpen ? null : a.id)} {...cardAppear(index)}
+          >
             <div className="emp-row" style={{ gap: 10, alignItems: "flex-start" }}>
               <div style={{ width: 8, height: 8, borderRadius: "50%", background: a.urgency, marginTop: 5, flexShrink: 0 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="emp-row" style={{ justifyContent: "space-between", gap: 8 }}>
+                <div className="emp-row" style={{ justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
                   <div style={{ fontWeight: 500, fontSize: 14 }}>{a.title}</div>
                   {a.nuevo && <span className="emp-badge workforce" style={{ flexShrink: 0 }}>Nuevo</span>}
                 </div>
+                {a.isRadar && <span className="emp-badge manager" style={{ marginTop: 5, display: "inline-block" }}>⚠️ Seguridad Ocupacional</span>}
                 {!isOpen && (
                   <div className="emp-muted" style={{ fontSize: 12, marginTop: 4, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
                     {a.summary}
@@ -1500,6 +1537,12 @@ function AvisosView() {
                         transition={{ duration: 0.2, delay: 0.08 }} style={{ marginTop: 4 }}
                       >
                         <div className="emp-muted" style={{ fontSize: 12 }}>{a.summary}</div>
+                        {a.isRadar && a.url && (
+                          <a href={a.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+                             style={{ display: "inline-block", marginTop: 8, fontSize: 12, fontWeight: 600, color: "var(--accent-blue-bright)" }}>
+                            Ver fuente oficial →
+                          </a>
+                        )}
                       </motion.div>
                     </motion.div>
                   )}
@@ -2368,7 +2411,7 @@ export default function EmpleadoShell() {
               {view === "recibos" && <div key="recibos"><RecibosView token={token} employee={employee} onOpen={() => pulse("#3b82f6")} refreshKey={payrollRefreshKey} /></div>}
               {view === "vacaciones" && <div key="vacaciones"><VacacionesView token={token} employee={employee} onSuccess={success} /></div>}
               {view === "solicitudes" && <div key="solicitudes"><SolicitudesView token={token} employee={employee} onSuccess={success} /></div>}
-              {view === "avisos" && <div key="avisos"><AvisosView /></div>}
+              {view === "avisos" && <div key="avisos"><AvisosView token={token} /></div>}
               {view === "ia" && (
                 <div key="ia">
                   <ConsultorIAView token={token} employee={employee} explode={explode} success={success} iaLocked={iaLocked} onLock={() => setIaLocked(true)} payrollRefreshKey={payrollRefreshKey} />

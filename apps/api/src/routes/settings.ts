@@ -53,6 +53,7 @@ const patchSchema = z.object({
     nomina:       z.boolean().optional(),
     salud:        z.boolean().optional(),
     capacitacion: z.boolean().optional(),
+    seguridad:    z.boolean().optional(),
   }).optional(),
 })
 

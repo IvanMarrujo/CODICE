@@ -328,6 +328,40 @@ export function fetchTeam(token, department) {
   return authedFetch(token, `/api/employees/team?department=${encodeURIComponent(department)}`);
 }
 
+// ── CÓDICE Radar — perfiles de riesgo por depto + digest normativo ──
+
+export function fetchDeptRiskProfiles(token) {
+  return authedFetch(token, `/api/risk/departments`);
+}
+
+export function fetchDeptRiskProfile(token, department) {
+  return authedFetch(token, `/api/risk/departments/${encodeURIComponent(department)}`);
+}
+
+export function updateDeptRiskProfile(token, department, payload) {
+  return authedFetchJSON(token, `/api/risk/departments/${encodeURIComponent(department)}`, "PATCH", payload);
+}
+
+export function logDeptAccidente(token, department, payload) {
+  return authedFetchJSON(token, `/api/risk/departments/${encodeURIComponent(department)}/accidente`, "POST", payload);
+}
+
+export function fetchRadarLatest(token) {
+  return authedFetch(token, `/api/radar/latest`);
+}
+
+export function refreshRadar(token) {
+  return authedFetchJSON(token, `/api/radar/refresh`, "POST");
+}
+
+export function fetchRadarHistory(token) {
+  return authedFetch(token, `/api/radar/history`);
+}
+
+export function fetchNews(token) {
+  return authedFetch(token, `/api/news`);
+}
+
 // SSE streaming hacia /api/ai/consult (ver routes/ai.ts) — a diferencia de
 // askClaude() de arriba (llamada directa al API público, sin backend), este
 // pasa por el proxy autenticado del tenant y hace streaming real vía

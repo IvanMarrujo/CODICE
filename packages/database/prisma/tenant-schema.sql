@@ -563,6 +563,47 @@ CREATE INDEX idx_audit_tenant ON {SCHEMA}.audit_log (tenant_id);
 CREATE INDEX idx_audit_action ON {SCHEMA}.audit_log (action);
 CREATE INDEX idx_audit_date   ON {SCHEMA}.audit_log (created_at DESC);
 
+-- ─── DEPARTMENT RISK PROFILES (CÓDICE Radar) ──────────────────
+-- Perfil de riesgo ocupacional por departamento — pre-sembrado desde
+-- la KB estática (occupational-risk-kb.ts), editable por RH.
+
+CREATE TABLE IF NOT EXISTS {SCHEMA}.department_risk_profiles (
+  id                    TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  tenant_id             TEXT        NOT NULL,
+  department            TEXT        NOT NULL,
+
+  perfil_optimo         JSONB       DEFAULT '{}',   -- { edadMin, edadMax, examenRequerido }
+  riesgos_ocupacionales JSONB       DEFAULT '[]',   -- [{ nombre, frecuencia: Alta|Media|Baja }]
+  historial_accidentes  JSONB       DEFAULT '[]',   -- [{ id, fecha, tipo, severidad, descripcion, employeeId }]
+  alertas_automaticas   JSONB       DEFAULT '[]',
+  fuentes_normativas    JSONB       DEFAULT '[]',   -- [{ clave, titulo, url }]
+
+  ultima_revision       DATE,
+  updated_at            TIMESTAMPTZ DEFAULT NOW(),
+  updated_by            TEXT,
+
+  CONSTRAINT uq_dept_risk UNIQUE (tenant_id, department)
+);
+
+CREATE INDEX idx_dept_risk_tenant ON {SCHEMA}.department_risk_profiles (tenant_id);
+
+-- ─── RADAR DIGESTS (CÓDICE Radar) ──────────────────────────────
+-- Un registro por corrida del job semanal (jobs/radarWeekly.ts) —
+-- el más reciente también se cachea en Redis (t:{tid}:radar:latest).
+
+CREATE TABLE IF NOT EXISTS {SCHEMA}.radar_digests (
+  id                TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  tenant_id         TEXT        NOT NULL,
+  generated_at      TIMESTAMPTZ DEFAULT NOW(),
+  items             JSONB       DEFAULT '[]',  -- [{ titulo, resumen, urgencia, url, norma }]
+  alta_count        INTEGER     DEFAULT 0,
+  media_count       INTEGER     DEFAULT 0,
+  baja_count        INTEGER     DEFAULT 0,
+  sources_searched  JSONB       DEFAULT '[]'
+);
+
+CREATE INDEX idx_radar_digests_tenant ON {SCHEMA}.radar_digests (tenant_id, generated_at DESC);
+
 -- ─── UPDATED_AT trigger (aplica a todas las tablas con ese campo)
 
 CREATE OR REPLACE FUNCTION {SCHEMA}.set_updated_at()
@@ -580,7 +621,8 @@ BEGIN
   FOREACH t IN ARRAY ARRAY[
     'employees','contracts','payroll_records','time_off',
     'requests','attendance_records','actas','courses','course_progress',
-    'bonuses','signage_slides','connected_sources','health_profiles','vacation_policy'
+    'bonuses','signage_slides','connected_sources','health_profiles','vacation_policy',
+    'department_risk_profiles'
   ]
   LOOP
     EXECUTE format(

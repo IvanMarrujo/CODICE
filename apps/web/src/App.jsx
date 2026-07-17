@@ -11,6 +11,7 @@ import {
   GraduationCap, Monitor, Activity, Award, Maximize, ChevronLeft, Megaphone,
   TrendingUp, ClipboardCheck, UserCheck, Zap, Plug, MapPin, QrCode, DollarSign, Upload,
   Pause, Play, Trash2, Unplug, Pencil, CheckSquare, Square, Lock, FileHeart, MessageSquare, Copy,
+  Radar as RadarIcon, ChevronDown, ExternalLink, Tag,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { io } from "socket.io-client";
@@ -30,6 +31,8 @@ import {
   fetchVacationPolicy, updateVacationPolicy, fetchStorageStatus, downloadNdaPreview,
   fetchRiskSummary, fetchRiskNarrative,
   fetchContractsExpiringSoon, consultAIStream,
+  fetchDeptRiskProfiles, updateDeptRiskProfile, logDeptAccidente,
+  fetchRadarLatest, refreshRadar, fetchRadarHistory,
 } from "./api.js";
 
 // Credenciales de auto-login del cockpit admin (tenant único GFP). Vienen de
@@ -2537,6 +2540,7 @@ const WHATSAPP_NOTIF_LABELS = [
   ["nomina",       "Nómina sincronizada"],
   ["salud",        "Alertas de salud"],
   ["capacitacion", "Cursos obligatorios pendientes"],
+  ["seguridad",    "Alertas de seguridad ocupacional (Radar)"],
 ];
 
 function WhatsAppConnectionCard({ settings, onSaved }) {
@@ -2980,6 +2984,382 @@ function VacationPolicyPanel({ token }) {
 
       {error && <div style={{ fontSize: 12.5, color: "var(--rose)", marginBottom: 12 }}>{error}</div>}
       <button className="btn btn-accent" disabled={busy} onClick={guardar}>{busy ? "Guardando…" : "Guardar política"}</button>
+    </div>
+  );
+}
+
+/* ============================================================
+   CÓDICE RADAR — Occupational Risk Intelligence System
+   ============================================================ */
+
+const RADAR_URGENCY_COLOR = { alta: "var(--rose)", media: "var(--amber)", baja: "var(--cyan)" };
+const RADAR_URGENCY_LABEL = { alta: "🔴 ALTA", media: "🟡 MEDIA", baja: "🔵 BAJA" };
+const EXAMEN_OPCIONES = ["trimestral", "cuatrimestral", "semestral", "anual"];
+
+function nextMonday7am(from) {
+  const d = new Date(from || Date.now());
+  const day = d.getDay();
+  let add = (1 - day + 7) % 7;
+  if (add === 0 && d.getHours() >= 7) add = 7;
+  d.setDate(d.getDate() + add);
+  d.setHours(7, 0, 0, 0);
+  return d;
+}
+function fmtRadarDate(d) {
+  if (!d) return "—";
+  const dt = new Date(d);
+  const dia = dt.toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" });
+  const hora = dt.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" });
+  return `${dia} · ${hora}`;
+}
+
+function deptComplianceScore(profile) {
+  if (!profile) return { score: 0, status: "sin_configurar" };
+  const po = profile.perfil_optimo || {};
+  let pts = 0;
+  if (po.examenRequerido) pts += 25;
+  if (Array.isArray(po.condicionesIncompatibles) && po.condicionesIncompatibles.length) pts += 15;
+  if (Array.isArray(profile.riesgos_ocupacionales) && profile.riesgos_ocupacionales.length) pts += 30;
+  if (Array.isArray(profile.fuentes_normativas) && profile.fuentes_normativas.length) pts += 15;
+  const revisionRecent = profile.ultima_revision && (Date.now() - new Date(profile.ultima_revision).getTime()) < 1000 * 60 * 60 * 24 * 180;
+  if (revisionRecent) pts += 15;
+  let status = "sin_configurar";
+  if (pts >= 30) status = "pendiente";
+  if (pts >= 80) status = "completo";
+  return { score: pts, status };
+}
+
+function RadarStatusBar({ generatedAt, onRefresh, busy }) {
+  const next = nextMonday7am(generatedAt ? new Date(generatedAt) : new Date());
+  return (
+    <div className="glass" style={{ padding: 16, marginBottom: 18, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 14 }}>
+      <div>
+        <div style={{ fontSize: 13 }}>
+          <RefreshCw size={13} className={busy ? "spin" : ""} style={{ marginRight: 7, verticalAlign: -2 }} />
+          Última actualización: <b>{generatedAt ? fmtRadarDate(generatedAt) : "aún no se ha corrido"}</b>
+        </div>
+        <div className="muted" style={{ fontSize: 12, marginTop: 5 }}>Próxima revisión: {fmtRadarDate(next)}</div>
+        <div className="muted2" style={{ fontSize: 11, marginTop: 5 }}>Fuentes verificadas: DOF · STPS · IMSS · OMS</div>
+      </div>
+      <button className="btn btn-accent" disabled={busy} onClick={onRefresh}>
+        <RefreshCw size={14} className={busy ? "spin" : ""} />{busy ? "Actualizando…" : "Actualizar ahora"}
+      </button>
+    </div>
+  );
+}
+
+function RadarAlertCard({ item, reviewed, onToggleReviewed }) {
+  const color = RADAR_URGENCY_COLOR[item.urgencia] || "var(--cyan)";
+  return (
+    <div className="glass" style={{ padding: 16, marginBottom: 12, borderLeft: `3px solid ${color}`, opacity: reviewed ? 0.55 : 1 }}>
+      <div className="row" style={{ gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+        <span className="chip" style={{ color }}>{RADAR_URGENCY_LABEL[item.urgencia] || item.urgencia}{item.norma ? ` · ${item.norma}` : ""}</span>
+      </div>
+      <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 5 }}>{item.titulo}</div>
+      <div className="muted" style={{ fontSize: 13, lineHeight: 1.55, marginBottom: 10 }}>{item.resumen}</div>
+      {item.aplicaA?.length > 0 && (
+        <div className="muted2" style={{ fontSize: 11.5, marginBottom: 10 }}>Aplica a: {item.aplicaA.join(" · ")}</div>
+      )}
+      <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+        {item.url && (
+          <a className="btn btn-sm" href={item.url} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>
+            <ExternalLink size={12} />Ver fuente oficial →
+          </a>
+        )}
+        <button className="btn btn-sm" onClick={onToggleReviewed}>
+          {reviewed ? <Check size={12} /> : null}{reviewed ? "Revisado" : "Marcar como revisado"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DeptRiskAccordion({ token, department, profile, onSaved }) {
+  const [open, setOpen] = useState(false);
+  const blank = { edadMin: "", edadMax: "", examenRequerido: "anual", condicionesIncompatibles: [] };
+  const [perfil, setPerfil] = useState(() => ({ ...blank, ...(profile?.perfil_optimo || {}) }));
+  const [riesgos, setRiesgos] = useState(profile?.riesgos_ocupacionales || []);
+  const [condInput, setCondInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [accForm, setAccForm] = useState({ fecha: todayISO, tipo: "", severidad: "leve", descripcion: "" });
+  const [accBusy, setAccBusy] = useState(false);
+
+  useEffect(() => {
+    setPerfil({ ...blank, ...(profile?.perfil_optimo || {}) });
+    setRiesgos(profile?.riesgos_ocupacionales || []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [department, profile]);
+
+  const historial = profile?.historial_accidentes || [];
+  const fuentes = profile?.fuentes_normativas || [];
+  const { score, status } = deptComplianceScore(profile);
+
+  const addRiesgo = () => setRiesgos((r) => [...r, { nombre: "", frecuencia: "Media" }]);
+  const setRiesgo = (i, field, val) => setRiesgos((r) => r.map((x, j) => (j === i ? { ...x, [field]: val } : x)));
+  const delRiesgo = (i) => setRiesgos((r) => r.filter((_, j) => j !== i));
+  const addCondicion = () => {
+    const v = condInput.trim();
+    if (!v) return;
+    setPerfil((p) => ({ ...p, condicionesIncompatibles: [...(p.condicionesIncompatibles || []), v] }));
+    setCondInput("");
+  };
+  const delCondicion = (i) => setPerfil((p) => ({ ...p, condicionesIncompatibles: p.condicionesIncompatibles.filter((_, j) => j !== i) }));
+
+  const guardar = async () => {
+    setBusy(true); setError(null);
+    try {
+      const saved = await updateDeptRiskProfile(token, department, {
+        perfilOptimo: perfil,
+        riesgosOcupacionales: riesgos,
+      });
+      onSaved(saved);
+      toast(`Perfil de riesgo guardado · ${department}`);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const registrarAccidente = async () => {
+    if (!accForm.tipo || !accForm.descripcion) { setError("Tipo y descripción son obligatorios"); return; }
+    setAccBusy(true); setError(null);
+    try {
+      const saved = await logDeptAccidente(token, department, accForm);
+      onSaved(saved);
+      setAccForm({ fecha: todayISO, tipo: "", severidad: "leve", descripcion: "" });
+      toast("Accidente registrado");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setAccBusy(false);
+    }
+  };
+
+  const STATUS_BADGE = {
+    completo:        { icon: "✅", label: "Completo", color: "var(--emerald)" },
+    pendiente:       { icon: "⚠️", label: "Pendiente revisión", color: "var(--amber)" },
+    sin_configurar:  { icon: "🔴", label: "Sin configurar", color: "var(--rose)" },
+  }[status];
+
+  return (
+    <div className="glass" style={{ padding: 0, overflow: "hidden", marginBottom: 12 }}>
+      <div className="row" style={{ padding: "14px 16px", justifyContent: "space-between", cursor: "pointer" }} onClick={() => setOpen((o) => !o)}>
+        <div className="row" style={{ gap: 10 }}>
+          <ChevronDown size={16} style={{ transform: open ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform .15s", color: "var(--muted2)" }} />
+          <span style={{ fontWeight: 700, fontSize: 13.5, textTransform: "uppercase", letterSpacing: ".02em" }}>{department}</span>
+        </div>
+        <span className="chip" style={{ color: STATUS_BADGE.color }}>{STATUS_BADGE.icon} {STATUS_BADGE.label} · {score}</span>
+      </div>
+
+      {open && (
+        <div style={{ padding: "4px 16px 18px", borderTop: "1px solid var(--border)" }}>
+          <div style={{ fontWeight: 600, fontSize: 12, margin: "14px 0 8px", color: "var(--muted)" }}>PERFIL ÓPTIMO DEL PUESTO</div>
+          <div className="row" style={{ gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+            <div style={{ flex: "1 1 120px" }}>
+              <label className="fld">Edad recomendada — mín.</label>
+              <input className="input" type="number" value={perfil.edadMin} onChange={(e) => setPerfil((p) => ({ ...p, edadMin: e.target.value === "" ? "" : Number(e.target.value) }))} />
+            </div>
+            <div style={{ flex: "1 1 120px" }}>
+              <label className="fld">Edad recomendada — máx.</label>
+              <input className="input" type="number" value={perfil.edadMax} onChange={(e) => setPerfil((p) => ({ ...p, edadMax: e.target.value === "" ? "" : Number(e.target.value) }))} />
+            </div>
+            <div style={{ flex: "1 1 160px" }}>
+              <label className="fld">Examen médico</label>
+              <select className="select" value={perfil.examenRequerido} onChange={(e) => setPerfil((p) => ({ ...p, examenRequerido: e.target.value }))}>
+                {EXAMEN_OPCIONES.map((o) => <option key={o} value={o}>{o[0].toUpperCase() + o.slice(1)}</option>)}
+              </select>
+            </div>
+          </div>
+          <label className="fld">Condiciones incompatibles</label>
+          <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+            {(perfil.condicionesIncompatibles || []).map((c, i) => (
+              <span key={i} className="chip" style={{ color: "var(--rose)" }}>{c}<X size={11} style={{ cursor: "pointer", marginLeft: 4 }} onClick={() => delCondicion(i)} /></span>
+            ))}
+          </div>
+          <div className="row" style={{ gap: 8, marginBottom: 18 }}>
+            <input className="input" placeholder="Ej. hernias_sin_operar" value={condInput} onChange={(e) => setCondInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addCondicion())} />
+            <button className="btn btn-sm" onClick={addCondicion}><Plus size={12} />Agregar</button>
+          </div>
+
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <div style={{ fontWeight: 600, fontSize: 12, color: "var(--muted)" }}>RIESGOS OCUPACIONALES</div>
+          </div>
+          {riesgos.map((r, i) => (
+            <div key={i} className="row" style={{ gap: 8, marginTop: 8 }}>
+              <input className="input" style={{ flex: 1 }} value={r.nombre} onChange={(e) => setRiesgo(i, "nombre", e.target.value)} placeholder="Nombre del riesgo" />
+              <select className="select" style={{ width: 110 }} value={r.frecuencia} onChange={(e) => setRiesgo(i, "frecuencia", e.target.value)}>
+                <option>Alta</option><option>Media</option><option>Baja</option>
+              </select>
+              <X size={15} style={{ cursor: "pointer", color: "var(--muted2)" }} onClick={() => delRiesgo(i)} />
+            </div>
+          ))}
+          <button className="btn btn-sm" style={{ marginTop: 10 }} onClick={addRiesgo}><Plus size={12} />Agregar riesgo</button>
+
+          <div style={{ fontWeight: 600, fontSize: 12, margin: "20px 0 8px", color: "var(--muted)" }}>HISTORIAL DE ACCIDENTES</div>
+          {historial.length === 0 ? (
+            <div className="muted" style={{ fontSize: 12.5, marginBottom: 10 }}>Sin accidentes registrados.</div>
+          ) : (
+            <div style={{ marginBottom: 10 }}>
+              {[...historial].sort((a, b) => new Date(b.fecha) - new Date(a.fecha)).map((a) => (
+                <div key={a.id} className="row" style={{ gap: 8, fontSize: 12, padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
+                  <span className="mono muted2">{a.fecha}</span>
+                  <span className="chip" style={{ color: a.severidad === "grave" ? "var(--rose)" : a.severidad === "moderado" ? "var(--amber)" : "var(--muted)" }}>{a.severidad}</span>
+                  <span style={{ fontWeight: 500 }}>{a.tipo}</span>
+                  <span className="muted" style={{ flex: 1 }}>{a.descripcion}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+            <input className="input" type="date" style={{ width: 140 }} value={accForm.fecha} onChange={(e) => setAccForm((f) => ({ ...f, fecha: e.target.value }))} />
+            <input className="input" style={{ flex: "1 1 140px" }} placeholder="Tipo (ej. caída, corte)" value={accForm.tipo} onChange={(e) => setAccForm((f) => ({ ...f, tipo: e.target.value }))} />
+            <select className="select" style={{ width: 110 }} value={accForm.severidad} onChange={(e) => setAccForm((f) => ({ ...f, severidad: e.target.value }))}>
+              <option value="leve">Leve</option><option value="moderado">Moderado</option><option value="grave">Grave</option>
+            </select>
+            <input className="input" style={{ flex: "2 1 200px" }} placeholder="Descripción" value={accForm.descripcion} onChange={(e) => setAccForm((f) => ({ ...f, descripcion: e.target.value }))} />
+            <button className="btn btn-sm" disabled={accBusy} onClick={registrarAccidente}><Plus size={12} />Registrar accidente</button>
+          </div>
+
+          <div style={{ fontWeight: 600, fontSize: 12, margin: "20px 0 8px", color: "var(--muted)" }}>FUENTES NORMATIVAS</div>
+          <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
+            {fuentes.length === 0
+              ? <span className="muted" style={{ fontSize: 12.5 }}>Sin normas asociadas todavía.</span>
+              : fuentes.map((n, i) => (
+                <a key={i} href={n.url} target="_blank" rel="noreferrer" className="chip" style={{ color: "var(--cyan)", textDecoration: "none" }}>
+                  <Tag size={10} />{n.clave}
+                </a>
+              ))}
+          </div>
+
+          {error && <div style={{ fontSize: 12.5, color: "var(--rose)", marginBottom: 10 }}>{error}</div>}
+          <button className="btn btn-accent" disabled={busy} onClick={guardar}>{busy ? "Guardando…" : "Guardar cambios para este departamento"}</button>
+          <div className="muted2" style={{ fontSize: 11, marginTop: 10 }}>
+            Última revisión: {profile?.ultima_revision ? fmtDate2(profile.ultima_revision) : "—"}{profile?.updated_by ? ` por ${profile.updated_by}` : ""}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function fmtDate2(d) {
+  return new Date(d).toLocaleDateString("es-MX", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
+}
+
+function RadarPage({ staff, token }) {
+  const [digest, setDigest] = useState({ status: "loading", data: null });
+  const [profiles, setProfiles] = useState({ status: "loading", byDept: {} });
+  const [refreshing, setRefreshing] = useState(false);
+  const [reviewed, setReviewed] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("codice_radar_reviewed") || "[]")); } catch { return new Set(); }
+  });
+
+  const loadDigest = useCallback(() => {
+    fetchRadarLatest(token).then((d) => setDigest({ status: "ready", data: d })).catch((e) => setDigest({ status: "error", data: null, error: e.message }));
+  }, [token]);
+  const loadProfiles = useCallback(() => {
+    fetchDeptRiskProfiles(token)
+      .then((d) => setProfiles({ status: "ready", byDept: Object.fromEntries((d.departments || []).map((p) => [p.department, p])) }))
+      .catch((e) => setProfiles({ status: "error", byDept: {}, error: e.message }));
+  }, [token]);
+
+  useEffect(() => { loadDigest(); loadProfiles(); }, [loadDigest, loadProfiles]);
+
+  const doRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const d = await refreshRadar(token);
+      setDigest({ status: "ready", data: d });
+      toast("Radar actualizado");
+    } catch (e) {
+      toast(e.message, "no");
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const toggleReviewed = (key) => {
+    setReviewed((r) => {
+      const next = new Set(r);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      localStorage.setItem("codice_radar_reviewed", JSON.stringify([...next]));
+      return next;
+    });
+  };
+
+  const departments = useMemo(() => {
+    const fromStaff = [...new Set(staff.map((s) => s.depto).filter(Boolean))];
+    const fromProfiles = Object.keys(profiles.byDept);
+    return [...new Set([...fromProfiles, ...fromStaff])].sort();
+  }, [staff, profiles.byDept]);
+
+  const items = digest.data?.items || [];
+  const sortedItems = [...items].sort((a, b) => {
+    const order = { alta: 0, media: 1, baja: 2 };
+    return (order[a.urgencia] ?? 3) - (order[b.urgencia] ?? 3);
+  });
+
+  return (
+    <div className="fadein">
+      <Eyebrow>Cumplimiento · normativo y de industria</Eyebrow>
+      <h1 style={{ fontSize: 22, fontWeight: 700, margin: "5px 0 4px" }}>Radar de Seguridad Ocupacional</h1>
+      <div className="muted" style={{ fontSize: 12.5, marginBottom: 16 }}>Actualizado cada lunes · Fuentes: STPS, IMSS, DOF, OMS</div>
+
+      <RadarStatusBar generatedAt={digest.data?.generatedAt} onRefresh={doRefresh} busy={refreshing} />
+
+      {digest.status === "loading" && <div className="muted" style={{ padding: 18 }}>Cargando radar…</div>}
+      {digest.status === "ready" && sortedItems.length === 0 && (
+        <div className="glass" style={{ padding: 20, textAlign: "center", marginBottom: 20 }}>
+          ✅ Sin alertas críticas esta semana. Tu operación cumple con la normativa vigente.
+        </div>
+      )}
+      {digest.status === "ready" && sortedItems.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          {sortedItems.map((item, i) => {
+            const key = `${item.titulo}::${item.norma || ""}`;
+            return <RadarAlertCard key={key + i} item={item} reviewed={reviewed.has(key)} onToggleReviewed={() => toggleReviewed(key)} />;
+          })}
+        </div>
+      )}
+
+      <h2 style={{ fontSize: 15, fontWeight: 700, margin: "24px 0 10px" }}>Perfiles de riesgo por departamento</h2>
+      {profiles.status === "loading" && <div className="muted" style={{ padding: 12 }}>Cargando perfiles…</div>}
+      {profiles.status === "error" && <div className="muted" style={{ padding: 12, color: "var(--rose)" }}>No se pudieron cargar los perfiles de riesgo ({profiles.error}).</div>}
+      {profiles.status === "ready" && departments.map((dept) => (
+        <DeptRiskAccordion
+          key={dept} token={token} department={dept} profile={profiles.byDept[dept]}
+          onSaved={(saved) => setProfiles((p) => ({ ...p, byDept: { ...p.byDept, [dept]: saved } }))}
+        />
+      ))}
+
+      <h2 style={{ fontSize: 15, fontWeight: 700, margin: "24px 0 10px" }}>Score de cumplimiento por departamento</h2>
+      <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
+        <table className="tbl">
+          <thead><tr><th>Depto</th><th>Perfil configurado</th><th>Última revisión</th><th>Score</th><th>Status</th></tr></thead>
+          <tbody>
+            {departments.map((dept) => {
+              const profile = profiles.byDept[dept];
+              const { score, status } = deptComplianceScore(profile);
+              const STATUS_LABEL = { completo: "✅ Completo", pendiente: "⚠️ Pendiente revisión", sin_configurar: "🔴 Sin configurar" };
+              return (
+                <tr key={dept} style={{ cursor: "default" }}>
+                  <td style={{ fontWeight: 500 }}>{dept}</td>
+                  <td className="muted">{profile ? "Sí" : "No"}</td>
+                  <td className="muted">{profile?.ultima_revision ? fmtDate2(profile.ultima_revision) : "—"}</td>
+                  <td className="mono">{score}</td>
+                  <td>{STATUS_LABEL[status]}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="muted2" style={{ fontSize: 11, marginTop: 14, fontStyle: "italic" }}>
+        Referencial — no sustituye asesoría legal o médica profesional. El análisis de IA puede contener imprecisiones; verifica siempre contra la fuente oficial antes de actuar.
+      </div>
     </div>
   );
 }
@@ -4108,6 +4488,7 @@ const NAV = [
   ["asistencia", "Asistencia", UserCheck],
   ["_s", "Cumplimiento"],
   ["contratos", "Contratos", FileSignature], ["lft", "Módulo LFT", Scale], ["filtro", "Filtro → Tablero", Filter],
+  ["radar", "Radar", RadarIcon],
   ["_s", "Integraciones"],
   ["conectores", "Conectores", Plug], ["whatsapp", "WhatsApp", MessageSquare],
   ["_s", "Personas"],
@@ -4248,6 +4629,7 @@ export default function App() {
           {view === "contratos" && <Contratos staff={staff} />}
           {view === "lft" && <LFT token={token} />}
           {view === "filtro" && <FiltroDash staff={staff} />}
+          {view === "radar" && <RadarPage staff={staff} token={token} />}
           {view === "capacitacion" && <Capacitacion staff={staff} />}
           {view === "senalizacion" && <Senalizacion />}
           {view === "autoservicio" && <Autoservicio staff={staff} />}

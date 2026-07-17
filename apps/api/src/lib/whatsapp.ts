@@ -18,10 +18,11 @@ export interface WhatsAppNotificationSettings {
   nomina:        boolean
   salud:         boolean
   capacitacion:  boolean
+  seguridad:     boolean  // CÓDICE Radar — alertas normativas/ocupacionales urgencia alta
 }
 
 const DEFAULT_SETTINGS: WhatsAppNotificationSettings = {
-  solicitudes: true, nomina: true, salud: true, capacitacion: true,
+  solicitudes: true, nomina: true, salud: true, capacitacion: true, seguridad: true,
 }
 
 function configKey(tenantId: string)   { return `t:${tenantId}:whatsapp:config` }

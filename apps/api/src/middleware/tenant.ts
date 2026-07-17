@@ -52,6 +52,7 @@ export async function tenantMiddleware(
         id:          true,
         slug:        true,
         name:        true,
+        industry:    true,
         dbSchema:    true,
         redisNs:     true,
         plan:        true,
