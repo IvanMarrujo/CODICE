@@ -11,12 +11,21 @@ import { Router, Request, Response, NextFunction } from 'express'
 import { z } from 'zod'
 import { requireEmployee } from '../middleware/auth'
 import { AppError } from '../lib/errors'
+import { paginationMeta } from '../lib/pagination'
 
 const router = Router()
 
 const listQuerySchema = z.object({
   date:       z.string().optional(), // YYYY-MM-DD, default hoy
   employeeId: z.string().optional(),
+  // page/limit son opcionales A PROPÓSITO (a diferencia de employees/payroll/
+  // requests): el widget de headcount del Cockpit necesita el roster del día
+  // COMPLETO para calcular totalActive/checkedIn/checkedOut/noRecord — si no
+  // se pide una página explícita, se devuelve todo (comportamiento previo,
+  // sin romper ese consumidor). La vista Asistencia (tabla "Registro de
+  // hoy") pagina en cliente sobre ese mismo arreglo completo, ver App.jsx.
+  page:       z.coerce.number().int().min(1).optional(),
+  limit:      z.coerce.number().int().min(1).max(100).optional(),
 })
 
 const checkinSchema = z.object({
@@ -82,7 +91,7 @@ async function seedIfEmpty(tenantDb: any, tenantId: string, date: string) {
 
 router.get('/', requireEmployee, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { date: dateInput, employeeId: queryEmployeeId } = listQuerySchema.parse(req.query)
+    const { date: dateInput, employeeId: queryEmployeeId, page: pageInput, limit } = listQuerySchema.parse(req.query)
     const date = dateInput || todayISO()
     const tenantId = req.tenant.id
     const tenantDb = req.tenantDb
@@ -118,12 +127,19 @@ router.get('/', requireEmployee, async (req: Request, res: Response, next: NextF
       method:       r.method,
     }))
 
+    // Agregados SIEMPRE sobre el arreglo completo del día — nunca sobre la
+    // página recortada de abajo, o el widget de headcount del Cockpit
+    // quedaría mal si alguien más pide una página específica.
     const totalActive = data.length
     const checkedIn   = data.filter((d: any) => d.checkInAt && !d.checkOutAt).length
     const checkedOut  = data.filter((d: any) => d.checkOutAt).length
     const noRecord    = data.filter((d: any) => !d.checkInAt).length
 
-    res.json({ date, data, totalActive, checkedIn, checkedOut, noRecord })
+    const page = pageInput ?? 1
+    const pageSize = limit ?? (data.length || 1) // sin page/limit explícitos: una sola "página" con todo
+    const pagedData = (pageInput || limit) ? data.slice((page - 1) * pageSize, page * pageSize) : data
+
+    res.json({ date, data: pagedData, totalActive, checkedIn, checkedOut, noRecord, ...paginationMeta(page, pageSize, totalActive) })
   } catch (err) {
     next(err)
   }

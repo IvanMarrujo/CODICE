@@ -10,6 +10,7 @@ import { z } from 'zod'
 import { requireManager, requireEmployee } from '../middleware/auth'
 import { AppError } from '../lib/errors'
 import { notifyHR } from '../lib/whatsapp'
+import { paginationQuerySchema, resolvePageSize, paginationMeta } from '../lib/pagination'
 
 const router = Router()
 
@@ -26,9 +27,7 @@ const listQuerySchema = z.object({
   stage:      z.string().optional(),
   type:       z.string().optional(),
   employeeId: z.string().optional(),
-  page:       z.coerce.number().int().min(1).default(1),
-  pageSize:   z.coerce.number().int().min(1).max(100).default(20),
-})
+}).merge(paginationQuerySchema)
 
 const decisionSchema = z.object({
   notes: z.string().optional(),
@@ -121,7 +120,9 @@ router.post('/', requireEmployee, async (req: Request, res: Response, next: Next
 
 router.get('/', requireEmployee, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { stage, type, employeeId, page, pageSize } = listQuerySchema.parse(req.query)
+    const parsed = listQuerySchema.parse(req.query)
+    const { stage, type, employeeId, page } = parsed
+    const pageSize = resolvePageSize(parsed)
     const tenantId = req.tenant.id
     const tenantDb = req.tenantDb
 
@@ -149,7 +150,7 @@ router.get('/', requireEmployee, async (req: Request, res: Response, next: NextF
         AND (${scopedEmployeeId}::text IS NULL OR employee_id = ${scopedEmployeeId})
     `
 
-    res.json({ data, total: totalRows[0]?.count ?? 0, page, pageSize })
+    res.json({ data, ...paginationMeta(page, pageSize, totalRows[0]?.count ?? 0) })
   } catch (err) {
     next(err)
   }

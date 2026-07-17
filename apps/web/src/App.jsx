@@ -6,7 +6,7 @@ import {
 import {
   LayoutDashboard, Users, FileSignature, Scale, Filter, MessageSquareText,
   Bot, Search, Download, Plus, X, GripVertical, RotateCcw, Boxes,
-  ChevronRight, AlertTriangle, CircleCheck, Clock, Send, Sparkles,
+  ChevronRight, ChevronLeft, AlertTriangle, CircleCheck, Clock, Send, Sparkles,
   ShieldCheck, CalendarDays, FileText, RefreshCw, Check, Inbox, Factory,
   GraduationCap, Monitor, Activity, Award, Maximize, ChevronLeft, Megaphone,
   TrendingUp, ClipboardCheck, UserCheck, Zap, Plug, MapPin, QrCode, DollarSign, Upload,
@@ -164,6 +164,24 @@ label.fld{display:block;font-size:11px;color:var(--muted);margin-bottom:5px;font
 .stepline{flex:1;height:2px;background:var(--border);min-width:10px}
 .stepline.done{background:var(--emerald)}
 
+.pagination{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-top:12px;padding:10px 2px}
+.pagination-summary{font-size:11.5px}
+.pagination-controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.pg-nav{padding:6px 8px}
+.pg-nav:disabled{opacity:.4;cursor:default;pointer-events:none}
+.pagination-pills{display:flex;align-items:center;gap:4px}
+.pg-pill{min-width:26px;height:26px;padding:0 6px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;
+  font-size:11.5px;font-weight:600;cursor:pointer;background:var(--glass-2);color:var(--muted);border:1px solid transparent;transition:.15s}
+.pg-pill:hover{border-color:var(--border-hi)}
+.pg-pill.on{background:linear-gradient(180deg,rgba(86,212,240,.28),rgba(86,212,240,.14));color:#cdf3fc;border-color:rgba(86,212,240,.42)}
+.pg-ellipsis{color:var(--muted-2);font-size:11.5px;padding:0 2px}
+.pg-jump-input{width:64px;padding:5px 8px;font-size:11.5px}
+.pg-mobile-label{display:none;font-size:11.5px;color:var(--muted);white-space:nowrap}
+@media (max-width: 560px){
+  .pagination-pills, .pg-jump{display:none}
+  .pg-mobile-label{display:inline}
+}
+
 .ai-bubble{position:fixed;bottom:24px;right:24px;z-index:9999;width:52px;height:52px;border-radius:50%;
   background:linear-gradient(135deg,#00c896,#00a67d);display:grid;place-items:center;cursor:pointer;
   box-shadow:0 8px 32px rgba(0,200,150,.25)}
@@ -234,6 +252,67 @@ const SLIDES = [
 const AUSENTISMO = [{ m: "Ene", v: 4.1, rot: 2.2 }, { m: "Feb", v: 3.7, rot: 1.9 }, { m: "Mar", v: 4.6, rot: 2.6 }, { m: "Abr", v: 3.9, rot: 2.1 }, { m: "May", v: 3.4, rot: 1.7 }, { m: "Jun", v: 3.1, rot: 1.5 }];
 
 /* ---------- atoms ---------- */
+const PAGE_SIZE = 25; // tamaño de página estándar para toda lista paginada (Plantilla, Solicitudes, Nómina, Asistencia)
+
+// Componente de paginación reusable — Prev/Next + hasta 5 pills de página
+// (con elipsis para el resto) + salto directo a página. En mobile (≤560px,
+// ver CSS ".pagination") solo se ven Prev/Next + "página X de Y".
+function Pagination({ page, totalPages, total, limit, onPageChange, itemLabel = "resultados" }) {
+  const [jump, setJump] = useState("");
+  if (total === 0) return null;
+
+  const start = (page - 1) * limit + 1;
+  const end = Math.min(total, page * limit);
+
+  const pills = (() => {
+    if (totalPages <= 5) return Array.from({ length: totalPages }, (_, i) => i + 1);
+    let lo = Math.max(1, page - 2);
+    const hi = Math.min(totalPages, lo + 4);
+    lo = Math.max(1, hi - 4);
+    return Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
+  })();
+
+  const go = (p) => { const clamped = Math.max(1, Math.min(totalPages, p)); if (clamped !== page) onPageChange(clamped); };
+
+  const submitJump = (e) => {
+    e.preventDefault();
+    const n = Number(jump);
+    if (Number.isFinite(n) && n >= 1 && n <= totalPages) go(n);
+    setJump("");
+  };
+
+  return (
+    <div className="pagination">
+      <div className="pagination-summary muted2">Mostrando {start}-{end} de {total} {itemLabel}</div>
+      <div className="pagination-controls">
+        <button className="btn btn-sm pg-nav" onClick={() => go(page - 1)} disabled={page <= 1}><ChevronLeft size={14} /></button>
+        <span className="pg-mobile-label">Página {page} de {totalPages}</span>
+        <div className="pagination-pills">
+          {pills[0] > 1 && (
+            <>
+              <span className="pg-pill" onClick={() => go(1)}>1</span>
+              {pills[0] > 2 && <span className="pg-ellipsis">…</span>}
+            </>
+          )}
+          {pills.map((p) => <span key={p} className={`pg-pill ${p === page ? "on" : ""}`} onClick={() => go(p)}>{p}</span>)}
+          {pills[pills.length - 1] < totalPages && (
+            <>
+              {pills[pills.length - 1] < totalPages - 1 && <span className="pg-ellipsis">…</span>}
+              <span className="pg-pill" onClick={() => go(totalPages)}>{totalPages}</span>
+            </>
+          )}
+        </div>
+        <button className="btn btn-sm pg-nav" onClick={() => go(page + 1)} disabled={page >= totalPages}><ChevronRight size={14} /></button>
+        {totalPages > 5 && (
+          <form className="pg-jump" onSubmit={submitJump}>
+            <input className="input pg-jump-input" placeholder="Ir a…" value={jump} onChange={(e) => setJump(e.target.value)} />
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const StatusChip = ({ s }) => <span className="chip"><span className="dot" style={{ background: STATUS[s] }} />{s}</span>;
 const Eyebrow = ({ children }) => <div className="eyebrow">{children}</div>;
 const tipStyle = { background: "rgba(8,12,20,.95)", border: "1px solid var(--border-hi)", borderRadius: 10, fontSize: 12, color: "#eaf0f7" };
@@ -675,6 +754,11 @@ function Plantilla({ staff, token, openExpediente, socket, refreshStaff, initial
   const [nuevo, setNuevo] = useState(false);
   const [sortNeto, setSortNeto] = useState(null); // null | "asc" | "desc"
   const [selected, setSelected] = useState(() => new Set());
+  const [page, setPage] = useState(1);
+  // staff ya viene completo en memoria (fetchEmployees trae todo el tenant en
+  // un solo fetch, ver api.js) — la paginación de Plantilla es sobre el
+  // arreglo ya filtrado, en cliente, no un refetch por página.
+  useEffect(() => { setPage(1); }, [q, fStatus, fDepto]);
   const [confirmAction, setConfirmAction] = useState(null); // null | "limpiar" | "bajaSeleccionados" | "eliminarSeleccionados" | { type:"eliminar", emp }
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [confirmError, setConfirmError] = useState(null);
@@ -703,9 +787,16 @@ function Plantilla({ staff, token, openExpediente, socket, refreshStaff, initial
   }
   const toggleSortNeto = () => setSortNeto((s) => (s === "desc" ? "asc" : s === "asc" ? null : "desc"));
 
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
   const toggleOne = (dbId) => setSelected((s) => { const next = new Set(s); if (next.has(dbId)) next.delete(dbId); else next.add(dbId); return next; });
-  const allVisibleSelected = rows.length > 0 && rows.every((e) => selected.has(e.dbId));
-  const toggleAll = () => setSelected((s) => (allVisibleSelected ? new Set() : new Set(rows.map((e) => e.dbId))));
+  const allVisibleSelected = pageRows.length > 0 && pageRows.every((e) => selected.has(e.dbId));
+  const toggleAll = () => setSelected((s) => {
+    const next = new Set(s);
+    for (const e of pageRows) { if (allVisibleSelected) next.delete(e.dbId); else next.add(e.dbId); }
+    return next;
+  });
 
   const exportSelected = () => {
     const chosen = rows.filter((e) => selected.has(e.dbId));
@@ -776,7 +867,7 @@ function Plantilla({ staff, token, openExpediente, socket, refreshStaff, initial
                 <th></th></tr>
             </thead>
             <tbody>
-              {rows.map((e) => {
+              {pageRows.map((e) => {
                 const neto = netoMap[e.dbId]?.netPay != null ? Number(netoMap[e.dbId].netPay) : null;
                 const isSel = selected.has(e.dbId);
                 return (
@@ -805,7 +896,7 @@ function Plantilla({ staff, token, openExpediente, socket, refreshStaff, initial
           </table>
         </div>
       </div>
-      <div className="muted2" style={{ fontSize: 11, marginTop: 8 }}>{rows.length} resultados</div>
+      <Pagination page={page} totalPages={totalPages} total={rows.length} limit={PAGE_SIZE} onPageChange={setPage} itemLabel="colaboradores" />
 
       {nuevo && (
         <NuevoDrawer
@@ -844,17 +935,32 @@ const Mini = ({ label, v }) => <div className="glass-2" style={{ padding: "9px 1
 function fmtDateShort(d) { return d ? new Date(d).toLocaleDateString("es-MX", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }) : "—"; }
 function fmtBytes(n) { if (!n) return "0 KB"; const kb = n / 1024; return kb < 1024 ? `${Math.round(kb)} KB` : `${(kb / 1024).toFixed(1)} MB`; }
 
-function useEmployeePayroll(token, employeeDbId) {
-  const [state, setState] = useState({ status: "loading", data: [] });
+function useEmployeePayroll(token, employeeDbId, page) {
+  const [state, setState] = useState({ status: "loading", data: [], total: 0, totalPages: 1 });
   const reload = useCallback(() => {
-    if (!token || !employeeDbId) { setState({ status: "ready", data: [] }); return; }
+    if (!token || !employeeDbId) { setState({ status: "ready", data: [], total: 0, totalPages: 1 }); return; }
     setState((s) => ({ ...s, status: "loading" }));
-    fetchPayroll(token, employeeDbId)
-      .then(({ data }) => setState({ status: "ready", data: data || [] }))
-      .catch((e) => setState({ status: "error", data: [], error: e.message }));
-  }, [token, employeeDbId]);
+    fetchPayroll(token, employeeDbId, { page, limit: PAGE_SIZE })
+      .then(({ data, total, totalPages }) => setState({ status: "ready", data: data || [], total: total || 0, totalPages: totalPages || 1 }))
+      .catch((e) => setState({ status: "error", data: [], total: 0, totalPages: 1, error: e.message }));
+  }, [token, employeeDbId, page]);
   useEffect(() => { reload(); }, [reload]);
   return { ...state, reload };
+}
+
+// Promedio "últimos 3 períodos" — deliberadamente independiente de la página
+// que esté viendo el usuario en la tabla paginada de abajo (si dependiera de
+// `payroll.data` de la página actual, navegar a la página 2+ mostraría el
+// promedio de recibos viejos como si fueran los "últimos 3").
+function useEmployeePayrollLast3(token, employeeDbId) {
+  const [state, setState] = useState({ status: "loading", data: [] });
+  useEffect(() => {
+    if (!token || !employeeDbId) { setState({ status: "ready", data: [] }); return; }
+    fetchPayroll(token, employeeDbId, { page: 1, limit: 3 })
+      .then(({ data }) => setState({ status: "ready", data: data || [] }))
+      .catch(() => setState({ status: "ready", data: [] }));
+  }, [token, employeeDbId]);
+  return state;
 }
 
 function PayrollAICard({ record, token }) {
@@ -956,22 +1062,28 @@ function PayrollRecordRow({ record, token, onDeleted }) {
 }
 
 function NominaTab({ e, token }) {
-  const payroll = useEmployeePayroll(token, e.dbId);
+  const [page, setPage] = useState(1);
+  useEffect(() => { setPage(1); }, [e.dbId]);
+  const payroll = useEmployeePayroll(token, e.dbId, page);
+  const last3 = useEmployeePayrollLast3(token, e.dbId);
+  // Si se borra el último recibo de la última página (o "Limpiar historial"
+  // deja menos páginas de las que había), evita quedar en una página vacía.
+  useEffect(() => { if (payroll.status === "ready" && page > payroll.totalPages) setPage(payroll.totalPages); }, [payroll.status, payroll.totalPages, page]);
   const [confirmClear, setConfirmClear] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
-  if (payroll.status === "loading") return <div className="muted" style={{ fontSize: 13, padding: "20px 0" }}>Cargando recibos…</div>;
-  if (!payroll.data.length) return <div className="glass-2 muted" style={{ padding: 16, fontSize: 13 }}>Sin recibos importados — sincronizar nómina.</div>;
+  if (payroll.status === "loading" && payroll.data.length === 0) return <div className="muted" style={{ fontSize: 13, padding: "20px 0" }}>Cargando recibos…</div>;
+  if (payroll.total === 0) return <div className="glass-2 muted" style={{ padding: 16, fontSize: 13 }}>Sin recibos importados — sincronizar nómina.</div>;
 
-  const last3 = payroll.data.slice(0, 3);
-  const avg = last3.reduce((a, r) => a + Number(r.net_pay), 0) / last3.length;
+  const avg = last3.data.length ? last3.data.reduce((a, r) => a + Number(r.net_pay), 0) / last3.data.length : null;
 
   const doClear = async () => {
     setBusy(true); setError(null);
     try {
       await bulkDeletePayrollRecords(token, e.dbId);
       setConfirmClear(false);
+      setPage(1);
       payroll.reload();
     } catch (err) {
       setError(err.message);
@@ -982,11 +1094,15 @@ function NominaTab({ e, token }) {
 
   return (
     <div>
-      <div className="glass-2" style={{ padding: 14, marginBottom: 14 }}>
-        <Eyebrow>Promedio neto últimos {last3.length} período{last3.length > 1 ? "s" : ""}</Eyebrow>
-        <div className="kpi" style={{ fontSize: 22, color: "var(--emerald)", marginTop: 4 }}>{mxn2(avg)}</div>
-      </div>
+      {avg != null && (
+        <div className="glass-2" style={{ padding: 14, marginBottom: 14 }}>
+          <Eyebrow>Promedio neto últimos {last3.data.length} período{last3.data.length > 1 ? "s" : ""}</Eyebrow>
+          <div className="kpi" style={{ fontSize: 22, color: "var(--emerald)", marginTop: 4 }}>{mxn2(avg)}</div>
+        </div>
+      )}
       {payroll.data.map((r) => <PayrollRecordRow key={r.id} record={r} token={token} onDeleted={payroll.reload} />)}
+
+      <Pagination page={page} totalPages={payroll.totalPages} total={payroll.total} limit={PAGE_SIZE} onPageChange={setPage} itemLabel="recibos" />
 
       <button className="btn" style={{ width: "100%", justifyContent: "center", marginTop: 4, color: "var(--rose)" }} onClick={() => setConfirmClear(true)}>
         <Trash2 size={13} />Limpiar historial de nómina
@@ -995,7 +1111,7 @@ function NominaTab({ e, token }) {
       {confirmClear && (
         <ConfirmModal
           title="Limpiar historial de nómina" tone="danger" confirmLabel="Sí, eliminar todo"
-          message={`¿Eliminar los ${payroll.data.length} recibos de nómina de ${e.nombre}? Esta acción no se puede deshacer.`}
+          message={`¿Eliminar los ${payroll.total} recibos de nómina de ${e.nombre}? Esta acción no se puede deshacer.`}
           busy={busy} error={error}
           onCancel={() => { setConfirmClear(false); setError(null); }}
           onConfirm={doClear}
@@ -3030,8 +3146,13 @@ function Autoservicio({ staff }) {
    ============================================================ */
 function Solicitudes({ solicitudes, resueltas, resolver }) {
   const [tab, setTab] = useState("activas");
+  const [page, setPage] = useState(1);
+  useEffect(() => { setPage(1); }, [tab]);
   const jefe = solicitudes.filter((s) => s.estado === "jefe").length;
   const wkf = solicitudes.filter((s) => s.estado === "wkf").length;
+  const list = tab === "activas" ? solicitudes : resueltas;
+  const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  const pageList = list.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   return (
     <div className="fadein">
       <Eyebrow>Solicitudes · autorización jefe directo → Workforce</Eyebrow>
@@ -3049,7 +3170,7 @@ function Solicitudes({ solicitudes, resueltas, resolver }) {
         <table className="tbl">
           <thead><tr><th>Folio</th><th>Colaborador</th><th>Trámite</th><th>Jefe directo</th><th>Etapa</th><th style={{ textAlign: "right" }}>Acción</th></tr></thead>
           <tbody>
-            {tab === "activas" && solicitudes.map((s) => (
+            {tab === "activas" && pageList.map((s) => (
               <tr key={s.id} style={{ cursor: "default" }}>
                 <td className="mono muted2">{s.id}</td>
                 <td style={{ fontWeight: 500 }}>{s.who}<div className="muted2" style={{ fontSize: 10.5 }}>{s.depto}</div></td>
@@ -3062,7 +3183,7 @@ function Solicitudes({ solicitudes, resueltas, resolver }) {
                 </div></td>
               </tr>
             ))}
-            {tab === "historial" && resueltas.map((s, i) => (
+            {tab === "historial" && pageList.map((s, i) => (
               <tr key={i} style={{ cursor: "default" }}>
                 <td className="mono muted2">{s.id}</td>
                 <td style={{ fontWeight: 500 }}>{s.who}</td>
@@ -3077,6 +3198,7 @@ function Solicitudes({ solicitudes, resueltas, resolver }) {
           </tbody>
         </table>
       </div>
+      <Pagination page={page} totalPages={totalPages} total={list.length} limit={PAGE_SIZE} onPageChange={setPage} itemLabel="solicitudes" />
       <div className="muted2" style={{ fontSize: 11, marginTop: 10 }}>Flujo: el jefe directo autoriza → pasa a Workforce para aprobación final. El colaborador ve el avance en su portal de autoservicio.</div>
     </div>
   );
@@ -3662,6 +3784,10 @@ function PseudoQR({ token, size = 180 }) {
 
 function Asistencia({ staff, attendance, openExpediente }) {
   const rows = attendance.data || [];
+  const [page, setPage] = useState(1);
+  useEffect(() => { setPage(1); }, [attendance.date]);
+  const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const STATUS_LABEL = {
     completo: { label: "Completo", color: "var(--emerald)" },
@@ -3720,7 +3846,7 @@ function Asistencia({ staff, attendance, openExpediente }) {
               <tr><th>Empleado</th><th>Depto</th><th>Turno</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Status</th></tr>
             </thead>
             <tbody>
-              {rows.map((r) => {
+              {pageRows.map((r) => {
                 const s = STATUS_LABEL[attendanceStatus(r)];
                 const horas = r.checkInAt && r.checkOutAt ? fmtHM((new Date(r.checkOutAt) - new Date(r.checkInAt)) / 60000) : "—";
                 return (
@@ -3739,6 +3865,7 @@ function Asistencia({ staff, attendance, openExpediente }) {
           </table>
         </div>
       </div>
+      <Pagination page={page} totalPages={totalPages} total={rows.length} limit={PAGE_SIZE} onPageChange={setPage} itemLabel="registros" />
 
       <Eyebrow>Estación QR de Asistencia</Eyebrow>
       <div className="glass" style={{ padding: 18, marginTop: 8 }}>

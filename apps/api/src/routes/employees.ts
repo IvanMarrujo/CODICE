@@ -10,25 +10,25 @@ import { z } from 'zod'
 import { Prisma } from '@prisma/client'
 import { requireHR, requireEmployee } from '../middleware/auth'
 import { AppError } from '../lib/errors'
+import { paginationQuerySchema, resolvePageSize, paginationMeta } from '../lib/pagination'
 
 const router = Router()
 
 // ── Validación ────────────────────────────────────────────────
 
+// page/limit/pageSize: ver lib/pagination.ts. `pageSize` (tope 2000) es el
+// nombre legacy que usa fetchEmployees(token) para traer el tenant COMPLETO
+// de una sola vez (Cockpit, Indicadores, dropdowns, etc. necesitan el roster
+// entero en memoria) — se conserva sin tocar su tope, ver investigación
+// "IMPORT DEBUG" (Plantilla truncaba en 100 antes de esa subida). `limit`
+// es el nombre nuevo para la paginación real de la UI de Plantilla (tope 100).
 const listQuerySchema = z.object({
   status:     z.string().optional(),
   department: z.string().optional(),
   plant:      z.string().optional(),
   shift:      z.string().optional(),
   search:     z.string().optional(),
-  page:       z.coerce.number().int().min(1).default(1),
-  // Tope subido de 100 -> 2000: con el cap en 100, Plantilla (que pide
-  // pageSize=100 sin paginar) truncaba SIEMPRE en 100 sin importar cuántos
-  // empleados existieran de verdad — un import de 400 (o los que sean)
-  // parecía "perder" empleados cuando en realidad estaban en la DB pero el
-  // fetch nunca los pedía. Ver investigación "IMPORT DEBUG".
-  pageSize:   z.coerce.number().int().min(1).max(2000).default(20),
-})
+}).merge(paginationQuerySchema)
 
 const employeeInputSchema = z.object({
   employeeCode:  z.string().optional(),
@@ -113,7 +113,9 @@ export async function findEmployeeOr404(tenantDb: any, tenantId: string, id: str
 
 router.get('/', requireHR, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { status, department, plant, shift, search, page, pageSize } = listQuerySchema.parse(req.query)
+    const parsed = listQuerySchema.parse(req.query)
+    const { status, department, plant, shift, search, page } = parsed
+    const pageSize = resolvePageSize(parsed)
     const tenantId = req.tenant.id
     const tenantDb = req.tenantDb
 
@@ -145,7 +147,11 @@ router.get('/', requireHR, async (req: Request, res: Response, next: NextFunctio
       tenantDb.$queryRaw<{ count: number }[]>`SELECT COUNT(*)::int AS count FROM employees WHERE ${whereSql}`,
     ])
 
-    res.json({ data, total: totalRows[0]?.count ?? 0, page, pageSize })
+    const total = totalRows[0]?.count ?? 0
+    // `data` (legacy) y `employees` (nombre pedido por la spec de paginación)
+    // son el mismo arreglo — así ni fetchEmployees() ni la nueva UI de
+    // Plantilla paginada tienen que cambiar de contrato.
+    res.json({ data, employees: data, ...paginationMeta(page, pageSize, total) })
   } catch (err) {
     next(err)
   }

@@ -9,6 +9,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { requireHR, requireEmployee } from '../middleware/auth'
 import { AppError } from '../lib/errors'
 import { redis } from '../lib/redis'
+import { paginationQuerySchema, resolvePageSize, paginationMeta } from '../lib/pagination'
 
 const router = Router()
 
@@ -17,9 +18,7 @@ const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5'
 
 const listQuerySchema = z.object({
   employeeId: z.string().min(1),
-  page:       z.coerce.number().int().min(1).default(1),
-  pageSize:   z.coerce.number().int().min(1).max(100).default(20),
-})
+}).merge(paginationQuerySchema)
 
 // ── GET /api/payroll/summary?period=2026-07-01 ───────────────
 // Agregados de nómina para el período dado (o el más reciente si se omite).
@@ -183,7 +182,9 @@ router.get('/:id/explain', requireEmployee, async (req: Request, res: Response, 
 
 router.get('/', requireHR, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { employeeId, page, pageSize } = listQuerySchema.parse(req.query)
+    const parsed = listQuerySchema.parse(req.query)
+    const { employeeId, page } = parsed
+    const pageSize = resolvePageSize(parsed)
     const tenantId = req.tenant.id
     const tenantDb = req.tenantDb
     const offset = (page - 1) * pageSize
@@ -201,7 +202,7 @@ router.get('/', requireHR, async (req: Request, res: Response, next: NextFunctio
       `,
     ])
 
-    res.json({ data, total: totalRows[0]?.count ?? 0, page, pageSize })
+    res.json({ data, ...paginationMeta(page, pageSize, totalRows[0]?.count ?? 0) })
   } catch (err) {
     next(err)
   }

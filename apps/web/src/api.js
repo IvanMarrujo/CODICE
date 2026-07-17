@@ -77,8 +77,8 @@ export function fetchSyncLogLatest(token) {
   return authedFetch(token, `/api/connectors/sync-log/latest`);
 }
 
-export function fetchPayroll(token, employeeId, pageSize = 50) {
-  return authedFetch(token, `/api/payroll?employeeId=${employeeId}&pageSize=${pageSize}`);
+export function fetchPayroll(token, employeeId, { page = 1, limit = 25 } = {}) {
+  return authedFetch(token, `/api/payroll?employeeId=${employeeId}&page=${page}&limit=${limit}`);
 }
 
 export function fetchPayrollSummary(token, period) {

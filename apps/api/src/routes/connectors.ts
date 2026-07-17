@@ -1074,6 +1074,16 @@ async function upsertEmployee(
   row: EmployeeUpsertRow,
   source: string
 ): Promise<{ id: string; outcome: 'inserted' | 'updated' }> {
+  // Sin RFC ni employee_code no hay identificador estable contra el cual
+  // matchear — insertar de todos modos crearía un empleado NUEVO en cada
+  // re-sync del mismo archivo (nunca encontraría el registro previo), ver
+  // "IMPORT DEBUG" parte 2. Se rechaza la fila entera en vez de darla de
+  // alta a ciegas; el caller (runExcelSync/runCfdiSync/runDbfSync) ya
+  // captura esta excepción y la cuenta en breakdown.skipped con el motivo.
+  if (!row.rfc && !row.employee_code) {
+    throw new Error('Fila omitida: sin RFC ni employee_code — no hay identificador estable para el upsert')
+  }
+
   let existingId: string | undefined
 
   if (row.rfc) {
