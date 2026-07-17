@@ -1,14 +1,16 @@
 // ============================================================
 // CÓDICE Agent — monitorea archivos de nómina locales (Nomipaq DBF,
-// Excel) y avisa a CÓDICE en cuanto cambian, vía el webhook HMAC de
-// apps/api/src/routes/webhook.ts. Corre en la máquina del cliente,
-// fuera del monorepo de la app.
+// Excel) y avisa a CÓDICE en cuanto cambian. Modo WebSocket: se conecta
+// una sola vez a /ws/agent y manda solo los campos que cambiaron (delta
+// sync) — sin subir el archivo completo en cada cambio. Corre en la
+// máquina del cliente, fuera del monorepo de la app.
 // ============================================================
 
 import * as fs   from 'fs'
 import * as path from 'path'
 import { startWatchers } from './watcher'
-import { startHeartbeat } from './heartbeat'
+import { AgentWSClient } from './wsClient'
+import { DiffEngine } from './diffEngine'
 
 export interface SourceConfig {
   type:      'EXCEL' | 'DBF' | 'CFDI'
@@ -34,21 +36,27 @@ export function loadConfig(configPath?: string): AgentConfig {
 }
 
 export function printBanner(config: AgentConfig) {
-  console.log(`\n✦ CÓDICE Agent v${config.agentVersion}`)
+  const wsUrl = `${config.apiUrl.replace(/^http/, 'ws')}/ws/agent`
+  console.log(`\n✦ CÓDICE Agent v${config.agentVersion} · WebSocket Mode`)
+  console.log(`  Conexión: ${wsUrl}`)
   for (const source of config.sources.filter((s) => s.enabled)) {
     console.log(`  Monitoreando: ${source.watchPath} (${source.type})`)
   }
   console.log(`  Tenant: ${config.tenantId}`)
-  console.log(`  Estado: ACTIVO\n`)
 }
 
 function main() {
   const config = loadConfig()
   printBanner(config)
-  startWatchers(config)
-  startHeartbeat(config)
-  // Keep-alive: los watchers de chokidar y el setInterval del heartbeat ya
-  // mantienen vivo el event loop — no hace falta un timer extra.
+
+  const diffEngine = new DiffEngine()
+  const wsClient = new AgentWSClient(config, () => {
+    console.log('  Estado: CONECTADO\n')
+    startWatchers(config, wsClient, diffEngine)
+  })
+  wsClient.connect()
+  // Keep-alive: los watchers de chokidar y el socket abierto ya mantienen
+  // vivo el event loop — no hace falta un timer extra.
 }
 
 if (require.main === module) main()

@@ -36,10 +36,15 @@ import adminRoutes      from './routes/admin'
 import auspexRoutes     from './routes/auspex'    // master cockpit (Auspex)
 import { startAutoSyncWorker } from './jobs/autoSyncQueue'
 import { setIO } from './lib/syncEmitter'
+import { attachAgentWebSocket } from './lib/agentWs'
 import webhookRoutes from './routes/webhook'
 import whatsappWebhookRoutes from './routes/whatsappWebhook'
 import settingsRoutes from './routes/settings'
 import { startDailyCourseDigest } from './jobs/dailyCourseDigest'
+import deptRiskRoutes from './routes/deptRisk'
+import radarRoutes from './routes/radar'
+import newsRoutes from './routes/news'
+import { startRadarWeekly } from './jobs/radarWeekly'
 
 const PORT = process.env.API_PORT || 3001
 
@@ -121,6 +126,9 @@ app.use('/api/notifications', notificationRoutes)
 app.use('/api/attendance', attendanceRoutes)
 app.use('/api/admin',      adminRoutes)
 app.use('/api/settings',   settingsRoutes)
+app.use('/api/risk',       deptRiskRoutes)
+app.use('/api/radar',      radarRoutes)
+app.use('/api/news',       newsRoutes)
 
 // Auspex (solo SUPER_ADMIN)
 app.use('/api/auspex', auspexRoutes)
@@ -139,6 +147,9 @@ io.on('connection', (socket) => {
     socket.join(`employee:${employeeId}`)
   })
 })
+
+// ── Agent WebSocket — /ws/agent (delta sync, ver lib/agentWs.ts) ────
+attachAgentWebSocket(server, io)
 
 // ── Auto-sync (BullMQ, in-process) ──────────────────────────
 startAutoSyncWorker(io, runReloadForSource)

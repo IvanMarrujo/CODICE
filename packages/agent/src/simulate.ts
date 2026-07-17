@@ -1,9 +1,9 @@
 // ============================================================
 // CÓDICE Agent · simulate (DEV ONLY) — crea ./watch/nomina.xlsx con
-// datos de ejemplo si no existe, y luego arranca el mismo watcher +
-// heartbeat que el agente real. Permite hacer la demo completa
-// (editar Excel -> webhook -> cola -> socket -> móvil) en una sola
-// máquina, sin un agente empaquetado de verdad.
+// datos de ejemplo si no existe, y luego arranca el mismo cliente
+// WebSocket + watcher que el agente real. Permite hacer la demo completa
+// (editar Excel -> delta por WebSocket -> Socket.io -> móvil) en una
+// sola máquina, sin un agente empaquetado de verdad.
 // ============================================================
 
 import * as fs   from 'fs'
@@ -11,7 +11,8 @@ import * as path from 'path'
 import * as XLSX from 'xlsx'
 import { loadConfig, printBanner } from './index'
 import { startWatchers } from './watcher'
-import { startHeartbeat } from './heartbeat'
+import { AgentWSClient } from './wsClient'
+import { DiffEngine } from './diffEngine'
 
 function ensureSampleWorkbook(watchPath: string) {
   const dir = path.dirname(watchPath)
@@ -21,12 +22,13 @@ function ensureSampleWorkbook(watchPath: string) {
     return
   }
 
-  // Sin columna NETO/DEDUCCIONES a propósito: el backend la calcula a partir
+  // Sin columna NETO/DEDUCCIONES a propósito: el agente la calcula a partir
   // de PERCEPCIONES/ISR/IMSS/INFONAVIT (ver excelParser.ts) — así, editar
-  // solo la celda de ISR ya cambia el neto reportado, como en la demo real.
+  // solo la celda de ISR ya cambia el neto reportado en el delta, como en
+  // la demo real.
   const rows = [
-    ['nombre', 'rfc', 'PERCEPCIONES', 'ISR', 'IMSS', 'INFONAVIT', 'PERIODO', 'FECHA_PAGO'],
-    ['Mariana Torres Vega', 'TOVM900101AB1', 6588.15, 1247, 300, 200, 'Q13', '2026-07-01'],
+    ['nombre', 'rfc', 'clave', 'status', 'PERCEPCIONES', 'ISR', 'IMSS', 'INFONAVIT', 'PERIODO', 'FECHA_PAGO'],
+    ['Mariana Torres Vega', 'TOVM900101AB1', 'GFP-1038', 'Activo', 6588.15, 1247, 300, 200, 'Q13', '2026-07-01'],
   ]
   const sheet = XLSX.utils.aoa_to_sheet(rows)
   const wb = XLSX.utils.book_new()
@@ -37,7 +39,7 @@ function ensureSampleWorkbook(watchPath: string) {
 
 function main() {
   const config = loadConfig()
-  console.log('\n✦ CÓDICE Agent — MODO SIMULACIÓN (un solo equipo)')
+  console.log('\n✦ CÓDICE Agent v' + config.agentVersion + ' · Modo simulación')
   printBanner(config)
 
   for (const source of config.sources) {
@@ -46,9 +48,14 @@ function main() {
     }
   }
 
-  console.log('[simulate] edita el archivo de ejemplo y guarda — el cambio se sube solo.\n')
-  startWatchers(config)
-  startHeartbeat(config)
+  const diffEngine = new DiffEngine()
+  const wsClient = new AgentWSClient(config, () => {
+    console.log('  Estado: CONECTADO\n')
+    console.log('[simulate] edita el archivo de ejemplo y guarda — el cambio se sube solo (solo el delta).\n')
+    console.log('[Esperando cambios...]\n')
+    startWatchers(config, wsClient, diffEngine)
+  })
+  wsClient.connect()
 }
 
 main()

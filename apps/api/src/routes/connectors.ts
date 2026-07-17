@@ -246,7 +246,7 @@ router.post('/preview/cfdi', requireHR, handlePreviewCfdiUpload, async (req: Req
 
 // ── Columnas de `employees` que estos conectores pueden escribir ─
 
-const WRITABLE_EMPLOYEE_COLUMNS: (keyof EmployeeUpsertRow)[] = [
+export const WRITABLE_EMPLOYEE_COLUMNS: (keyof EmployeeUpsertRow)[] = [
   'first_name', 'last_name', 'rfc', 'curp', 'nss', 'daily_salary', 'monthly_salary',
   'department', 'position', 'plant', 'shift', 'hire_date',
   'contract_type', 'status', 'employee_code', 'bank_name', 'bank_clabe', 'notes',
@@ -288,7 +288,7 @@ function effectiveFieldMap(headers: { label: string; field: string | null }[]): 
   return map
 }
 
-const WRITABLE_PAYROLL_COLUMNS: (keyof PayrollUpsertRow)[] = [
+export const WRITABLE_PAYROLL_COLUMNS: (keyof PayrollUpsertRow)[] = [
   'folio', 'uuid_sat', 'payroll_type', 'period_start', 'period_end', 'payment_date',
   'days_paid', 'gross_taxable', 'gross_exempt', 'total_income', 'isr',
   'imss_employee', 'infonavit', 'other_deductions', 'total_deductions', 'net_pay',
@@ -775,7 +775,14 @@ router.get('/agent-status/:tenantId', requireHR, async (req: Request, res: Respo
     const ageSeconds = Math.round((Date.now() - heartbeat.ts) / 1000)
     if (ageSeconds > 90) return res.json({ status: 'OFFLINE' }) // por si el reloj del agente difiere del TTL de Redis
 
-    res.json({ status: 'ACTIVE', ...heartbeat, ageSeconds })
+    // Contador de deltas — incrementado por lib/agentWs.ts en cada mensaje
+    // 'delta' aplicado; TTL ~25h así que "0" tras un día sin cambios es
+    // correcto (no un cache-miss disfrazado).
+    const deltaCount = heartbeat.mode === 'websocket'
+      ? Number((await redis.get(`t:${req.tenant.id}:agent:delta_count`)) || 0)
+      : undefined
+
+    res.json({ status: 'ACTIVE', ...heartbeat, ageSeconds, deltaCount })
   } catch (err) {
     next(err)
   }
@@ -796,7 +803,7 @@ router.get('/download-agent/:tenantId', requireHR, async (req: Request, res: Res
       apiUrl:        process.env.AGENT_API_URL || 'http://localhost:3001',
       tenantId:      req.tenant.id,
       webhookSecret: process.env.WEBHOOK_SECRET || 'codice_webhook_secret_dev',
-      agentVersion:  '0.1.0',
+      agentVersion:  '0.2.0',
       sources: [
         { type: 'EXCEL', watchPath: './watch/nomina.xlsx', enabled: true },
         { type: 'DBF',   watchPath: './watch/', files: ['EMPLEA.DBF', 'NOMINA.DBF'], enabled: false },
@@ -809,7 +816,8 @@ router.get('/download-agent/:tenantId', requireHR, async (req: Request, res: Res
       'CÓDICE Agent — Instrucciones\n\n' +
       '1. Edita config.json con tu ruta.\n' +
       '2. Ejecuta codice-agent.exe.\n' +
-      '3. Listo.\n'
+      '3. Listo — el agente se conecta por WebSocket y solo sube los cambios (deltas), no el archivo completo.\n' +
+      '   Si necesitas forzar una sincronización completa, reemplaza el archivo desde el panel de Conectores.\n'
 
     const installServiceBat =
       'sc create "CODICE Agent" binPath= "%~dp0codice-agent.exe"\n' +
@@ -1068,7 +1076,7 @@ router.delete('/sources/:sourceId/with-data', requireHR, async (req: Request, re
 // `tenantDb` ya tiene el search_path apuntando al schema del tenant
 // (ver middleware/tenant.ts) — `employees` referencia esa tabla sin calificar.
 
-async function upsertEmployee(
+export async function upsertEmployee(
   tenantDb: any,
   tenantId: string,
   row: EmployeeUpsertRow,
@@ -1137,7 +1145,7 @@ async function upsertEmployee(
 // vez de duplicarlo, que es justo lo que permite que "Recargar ahora"
 // converja en lugar de acumular registros en cada re-lectura.
 
-async function upsertPayrollRecord(
+export async function upsertPayrollRecord(
   tenantDb: any,
   tenantId: string,
   employeeId: string,

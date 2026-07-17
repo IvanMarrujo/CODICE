@@ -2445,6 +2445,7 @@ function AgentStatusBadge({ agentStatus, token, tenantId }) {
   if (!agentStatus || agentStatus.status === "loading") return null;
 
   const isActive = agentStatus.status === "ACTIVE";
+  const isWebSocket = agentStatus.mode === "websocket";
   const color = isActive ? "var(--emerald)" : "var(--amber)";
   const paths = agentStatus.watchedPaths?.join(", ") || agentStatus.sourceType || null;
 
@@ -2453,13 +2454,22 @@ function AgentStatusBadge({ agentStatus, token, tenantId }) {
       <div className="row" style={{ gap: 8 }}>
         <span className={`dot ${isActive ? "live" : ""}`} style={{ background: color }} />
         <span className="mono" style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", color }}>
-          {isActive ? "AGENTE ACTIVO" : "AGENTE SIN CONEXIÓN"}
+          {isActive ? `CONECTADO${isWebSocket ? " · WebSocket" : ""}` : "AGENTE SIN CONEXIÓN"}
         </span>
       </div>
       {isActive ? (
         <div className="muted2" style={{ fontSize: 11, marginTop: 4, lineHeight: 1.5 }}>
           Agente v{agentStatus.agentVersion || agentStatus.version || "0.1"}{agentStatus.os ? ` · ${agentStatus.os}` : ""}{paths ? ` · monitoreando ${paths}` : ""}
+          <br />
+          {isWebSocket ? (
+            <>Latencia estimada: {"<"} 1 segundo · Modo: Delta sync · Solo cambios</>
+          ) : (
+            <>Modo: Archivo completo · Sync manual</>
+          )}
           <br />Última verificación: hace {agentStatus.ageSeconds ?? 0}s
+          {isWebSocket && agentStatus.deltaCount != null && (
+            <><br />Últimas ~24h: {agentStatus.deltaCount} deltas procesados</>
+          )}
         </div>
       ) : (
         <div style={{ marginTop: 8 }}>

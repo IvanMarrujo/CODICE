@@ -25,8 +25,8 @@ import { autoSyncQueue }         from '../jobs/autoSyncQueue'
 
 const router = Router()
 
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'codice_webhook_secret_dev'
-const TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000 // 5 min
+export const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'codice_webhook_secret_dev'
+export const TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000 // 5 min
 
 const EXT_BY_SOURCE_TYPE: Record<string, Set<string>> = {
   EXCEL: new Set(['.xlsx', '.csv']),
