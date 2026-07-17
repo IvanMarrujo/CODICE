@@ -34,6 +34,7 @@ import {
   fetchDeptRiskProfiles, updateDeptRiskProfile, logDeptAccidente,
   fetchRadarLatest, refreshRadar, fetchRadarHistory,
   fetchEmployeeGamification, fetchGamificationLeaderboard,
+  fetchZktecoDevices, registerZktecoDevice, deleteZktecoDevice,
 } from "./api.js";
 
 // Credenciales de auto-login del cockpit admin (tenant único GFP). Vienen de
@@ -4266,7 +4267,155 @@ function PseudoQR({ token, size = 180 }) {
   );
 }
 
-function Asistencia({ staff, attendance, openExpediente }) {
+// ── ZKTeco ADMS — dispositivos + registro en vivo ──────────────
+
+function useZktecoDevices(token) {
+  const [state, setState] = useState({ status: "loading", data: [] });
+  const reload = useCallback(() => {
+    if (!token) return;
+    fetchZktecoDevices(token)
+      .then(({ devices }) => setState({ status: "ready", data: devices || [] }))
+      .catch((e) => setState({ status: "error", data: [], error: e.message }));
+  }, [token]);
+  useEffect(() => { reload(); }, [reload]);
+  return { ...state, reload };
+}
+
+function DeviceCard({ device, onDelete }) {
+  return (
+    <div className="glass-2" style={{ padding: 14, marginBottom: 10 }}>
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <div className="row" style={{ gap: 8 }}>
+          <span className="dot" style={{ background: device.status === "ACTIVE" ? "var(--emerald)" : "var(--muted-2)" }} />
+          <span style={{ fontWeight: 600, fontSize: 13.5 }}>{device.alias || "ZKTeco"} · {device.model}</span>
+        </div>
+        <X size={14} style={{ cursor: "pointer", color: "var(--muted2)" }} onClick={() => onDelete(device.sn)} />
+      </div>
+      <div className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>Serie: {device.sn}{device.location ? ` · ${device.location}` : ""}</div>
+      <div className="muted2" style={{ fontSize: 11, marginTop: 4 }}>Último registro: {timeAgo(device.last_ping)}</div>
+      <div className="muted2" style={{ fontSize: 10.5, marginTop: 4 }}>Protocolo: ADMS Push · Puerto 443</div>
+    </div>
+  );
+}
+
+function RegisterDeviceForm({ token, onRegistered, onCancel }) {
+  const [form, setForm] = useState({ sn: "", alias: "", location: "", ipAddress: "" });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const f = (k) => (e) => setForm((s) => ({ ...s, [k]: e.target.value }));
+
+  const submit = async () => {
+    if (!form.sn.trim()) { setError("El número de serie es obligatorio"); return; }
+    setBusy(true); setError(null);
+    try {
+      await registerZktecoDevice(token, form);
+      toast("Dispositivo registrado");
+      onRegistered();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="glass-2" style={{ padding: 14, marginBottom: 12 }}>
+      <label className="fld">SN (del dispositivo)</label>
+      <input className="input" style={{ marginBottom: 10 }} value={form.sn} onChange={f("sn")} placeholder="Ej. ABC123456" />
+      <label className="fld">Alias</label>
+      <input className="input" style={{ marginBottom: 10 }} value={form.alias} onChange={f("alias")} placeholder="Ej. Checadora acceso principal" />
+      <label className="fld">Ubicación</label>
+      <input className="input" style={{ marginBottom: 10 }} value={form.location} onChange={f("location")} placeholder="Ej. Planta Vallejo" />
+      <label className="fld">IP</label>
+      <input className="input" style={{ marginBottom: 12 }} value={form.ipAddress} onChange={f("ipAddress")} placeholder="Ej. 192.168.1.50" />
+      {error && <div style={{ fontSize: 12, color: "var(--rose)", marginBottom: 10 }}>{error}</div>}
+      <div className="row" style={{ gap: 8 }}>
+        <button className="btn btn-accent" disabled={busy} onClick={submit}>{busy ? "Guardando…" : "Guardar dispositivo"}</button>
+        <button className="btn" onClick={onCancel}>Cancelar</button>
+      </div>
+    </div>
+  );
+}
+
+function DevicesPanel({ token }) {
+  const { status, data, reload } = useZktecoDevices(token);
+  const [showForm, setShowForm] = useState(false);
+  const serverHost = (import.meta.env.VITE_API_URL || "https://codice-api-production.up.railway.app").replace(/^https?:\/\//, "");
+
+  const copyConfig = () => {
+    navigator.clipboard?.writeText(`Server: ${serverHost}\nPort: 443\nProtocolo: ADMS Push`);
+    toast("Configuración copiada");
+  };
+
+  const remove = async (sn) => {
+    try {
+      await deleteZktecoDevice(token, sn);
+      toast("Dispositivo eliminado");
+      reload();
+    } catch (e) {
+      toast(e.message, "no");
+    }
+  };
+
+  return (
+    <div className="glass" style={{ padding: 16 }}>
+      <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
+        <Eyebrow>Dispositivos conectados</Eyebrow>
+        <button className="btn btn-sm" onClick={() => setShowForm((s) => !s)}><Plus size={12} />Registrar dispositivo</button>
+      </div>
+
+      {showForm && <RegisterDeviceForm token={token} onRegistered={() => { setShowForm(false); reload(); }} onCancel={() => setShowForm(false)} />}
+
+      {status === "loading" && <div className="muted" style={{ fontSize: 12.5 }}>Cargando dispositivos…</div>}
+      {status === "ready" && data.length === 0 && !showForm && (
+        <div className="muted" style={{ fontSize: 12.5, marginBottom: 4 }}>Sin checadoras registradas todavía.</div>
+      )}
+      {status === "ready" && data.map((d) => <DeviceCard key={d.sn} device={d} onDelete={remove} />)}
+
+      <div className="glass-2" style={{ padding: 12, marginTop: 10 }}>
+        <div className="muted2" style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 6 }}>Configuración para el dispositivo</div>
+        <div className="mono" style={{ fontSize: 11.5, lineHeight: 1.8 }}>Server: {serverHost}<br />Port: 443</div>
+        <button className="btn btn-sm" style={{ marginTop: 8 }} onClick={copyConfig}><Copy size={11} />Copiar configuración</button>
+      </div>
+    </div>
+  );
+}
+
+const VERIFY_LABEL = { fingerprint: "Huella", card: "Tarjeta", face: "Rostro" };
+
+function LivePunchFeed({ socket }) {
+  const [punches, setPunches] = useState([]);
+  useEffect(() => {
+    if (!socket) return;
+    const onPunch = (p) => setPunches((prev) => [p, ...prev].slice(0, 20));
+    socket.on("attendance:punch", onPunch);
+    return () => socket.off("attendance:punch", onPunch);
+  }, [socket]);
+
+  return (
+    <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
+      <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", fontWeight: 600, fontSize: 13 }}>Registro en vivo · checadora</div>
+      <div style={{ maxHeight: 360, overflowY: "auto" }}>
+        {punches.length === 0 ? (
+          <div className="muted" style={{ padding: 18, fontSize: 12.5 }}>Sin checadas en vivo todavía — aparecerán aquí en cuanto llegue un punch de la checadora.</div>
+        ) : punches.map((p, i) => (
+          <div key={i} className="row" style={{ padding: "10px 16px", borderBottom: "1px solid var(--border)", justifyContent: "space-between", gap: 8 }}>
+            <div className="row" style={{ gap: 8, minWidth: 0 }}>
+              <span className="mono muted2" style={{ fontSize: 11.5, flexShrink: 0 }}>{fmtTime(p.timestamp)}</span>
+              <span style={{ fontWeight: 500, fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.employeeName}</span>
+            </div>
+            <div className="row" style={{ gap: 6, flexShrink: 0 }}>
+              <span className="chip" style={{ color: p.type === "entry" ? "var(--emerald)" : "var(--amber)" }}>{p.type === "entry" ? "Entrada" : "Salida"}</span>
+              <span className="muted2" style={{ fontSize: 11 }}>{VERIFY_LABEL[p.verifyMode] || "—"}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Asistencia({ staff, attendance, openExpediente, token, socket }) {
   const rows = attendance.data || [];
   const [page, setPage] = useState(1);
   useEffect(() => { setPage(1); }, [attendance.date]);
@@ -4317,6 +4466,11 @@ function Asistencia({ staff, attendance, openExpediente }) {
           ))}
         </div>
         <HeadcountWidget attendance={attendance} compact={false} staff={staff} openExpediente={openExpediente} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+        <LivePunchFeed socket={socket} />
+        <DevicesPanel token={token} />
       </div>
 
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
@@ -4719,7 +4873,7 @@ export default function App() {
           {view === "indicadores" && <IndicadoresWKF staff={staff} token={token} openExpediente={openExpediente} />}
           {view === "conectores" && <Conectores token={token} socket={socket} tenantId={tenantId} />}
           {view === "whatsapp" && <WhatsAppPage token={token} />}
-          {view === "asistencia" && <Asistencia staff={staff} attendance={attendance} openExpediente={openExpediente} />}
+          {view === "asistencia" && <Asistencia staff={staff} attendance={attendance} openExpediente={openExpediente} token={token} socket={socket} />}
           {view === "contratos" && <Contratos staff={staff} />}
           {view === "lft" && <LFT token={token} />}
           {view === "filtro" && <FiltroDash staff={staff} />}

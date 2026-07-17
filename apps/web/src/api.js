@@ -370,6 +370,20 @@ export function fetchNews(token) {
   return authedFetch(token, `/api/news`);
 }
 
+// ── Dispositivos ZKTeco (checadoras ADMS) ───────────────────────
+
+export function fetchZktecoDevices(token) {
+  return authedFetch(token, `/api/devices/zkteco`);
+}
+
+export function registerZktecoDevice(token, payload) {
+  return authedFetchJSON(token, `/api/devices/zkteco`, "POST", payload);
+}
+
+export function deleteZktecoDevice(token, sn) {
+  return authedFetchJSON(token, `/api/devices/zkteco/${encodeURIComponent(sn)}`, "DELETE");
+}
+
 // SSE streaming hacia /api/ai/consult (ver routes/ai.ts) — a diferencia de
 // askClaude() de arriba (llamada directa al API público, sin backend), este
 // pasa por el proxy autenticado del tenant y hace streaming real vía

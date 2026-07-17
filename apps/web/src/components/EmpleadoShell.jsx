@@ -1163,10 +1163,10 @@ function XpFlashHost() {
 
 // ── HOME ─────────────────────────────────────────────────────
 
-function HomeView({ token, employee, unreadCount, onGoAvisos, onGoRecibos, onOpenTeam, refreshKey, gamificationRefreshKey }) {
+function HomeView({ token, employee, unreadCount, onGoAvisos, onGoRecibos, onOpenTeam, refreshKey, gamificationRefreshKey, attendanceRefreshKey }) {
   const payroll = useLatestPayroll(token, employee.id, refreshKey);
   const p = payroll.data;
-  const attendance = useTodayAttendance(token, employee.id);
+  const attendance = useTodayAttendance(token, employee.id, attendanceRefreshKey);
   const a = attendance.data;
   const gamification = useGamification(token, employee.id, gamificationRefreshKey);
   const g = gamification.data;
@@ -1806,7 +1806,7 @@ function useGamification(token, employeeId, refreshKey) {
 
 // Estado de asistencia del día — mock: no hay checadora real, pero el
 // registro (o su ausencia) sí viene de la base de datos.
-function useTodayAttendance(token, employeeId) {
+function useTodayAttendance(token, employeeId, refreshKey) {
   const [state, setState] = useState({ status: "loading", data: null });
   const reload = useCallback(async () => {
     try {
@@ -1816,7 +1816,7 @@ function useTodayAttendance(token, employeeId) {
       setState({ status: "error", data: null });
     }
   }, [token, employeeId]);
-  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => { reload(); }, [reload, refreshKey]);
   return { ...state, reload };
 }
 
@@ -2522,6 +2522,7 @@ export default function EmpleadoShell() {
   const [iaLocked, setIaLocked] = useState(false);
   const [payrollRefreshKey, setPayrollRefreshKey] = useState(0);
   const [gamificationRefreshKey, setGamificationRefreshKey] = useState(0);
+  const [attendanceRefreshKey, setAttendanceRefreshKey] = useState(0);
   const [teamGraphOpen, setTeamGraphOpen] = useState(false);
   const socketRef = useRef(null);
 
@@ -2557,6 +2558,14 @@ export default function EmpleadoShell() {
     socket.on("xp:earned", (payload) => {
       setGamificationRefreshKey((k) => k + 1);
       empXpFlash(payload);
+    });
+    // Checada real vía checadora ZKTeco (ver routes/zktecoWebhook.ts) — el
+    // propio colaborador nunca dio tap en "Registrar entrada/salida", así
+    // que sin este evento el status bar de Home se quedaría desactualizado
+    // hasta el siguiente refresh manual.
+    socket.on("attendance:recorded", (payload) => {
+      setAttendanceRefreshKey((k) => k + 1);
+      empToast(`✅ ${payload.message} · ${fmtTime(payload.timestamp)}`, "success");
     });
     return () => { socket.disconnect(); socketRef.current = null; };
   }, [employee?.id]);
@@ -2636,7 +2645,7 @@ export default function EmpleadoShell() {
 
           <main className="emp-main">
             <AnimatePresence mode="wait">
-              {view === "home" && <div key="home"><HomeView token={token} employee={employee} unreadCount={unreadCount} onGoAvisos={() => openModule("avisos")} onGoRecibos={() => openModule("recibos")} onOpenTeam={() => setTeamGraphOpen(true)} refreshKey={payrollRefreshKey} gamificationRefreshKey={gamificationRefreshKey} /></div>}
+              {view === "home" && <div key="home"><HomeView token={token} employee={employee} unreadCount={unreadCount} onGoAvisos={() => openModule("avisos")} onGoRecibos={() => openModule("recibos")} onOpenTeam={() => setTeamGraphOpen(true)} refreshKey={payrollRefreshKey} gamificationRefreshKey={gamificationRefreshKey} attendanceRefreshKey={attendanceRefreshKey} /></div>}
               {view === "recibos" && <div key="recibos"><RecibosView token={token} employee={employee} onOpen={() => pulse("#3b82f6")} refreshKey={payrollRefreshKey} /></div>}
               {view === "vacaciones" && <div key="vacaciones"><VacacionesView token={token} employee={employee} onSuccess={success} /></div>}
               {view === "solicitudes" && <div key="solicitudes"><SolicitudesView token={token} employee={employee} onSuccess={success} /></div>}
