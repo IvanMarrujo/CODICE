@@ -6,7 +6,7 @@ import {
 import {
   LayoutDashboard, Users, FileSignature, Scale, Filter, MessageSquareText,
   Bot, Search, Download, Plus, X, GripVertical, RotateCcw, Boxes,
-  ChevronRight, ChevronLeft, AlertTriangle, CircleCheck, Clock, Send, Sparkles,
+  ChevronRight, AlertTriangle, CircleCheck, Clock, Send, Sparkles,
   ShieldCheck, CalendarDays, FileText, RefreshCw, Check, Inbox, Factory,
   GraduationCap, Monitor, Activity, Award, Maximize, ChevronLeft, Megaphone,
   TrendingUp, ClipboardCheck, UserCheck, Zap, Plug, MapPin, QrCode, DollarSign, Upload,
