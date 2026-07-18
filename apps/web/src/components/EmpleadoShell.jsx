@@ -607,10 +607,12 @@ body{font-family:'DM Sans',system-ui,-apple-system,"Segoe UI",sans-serif}
 .emp-badge-card{flex:0 0 80px;height:96px;border-radius:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
   padding:8px 6px;text-align:center;border:1px solid var(--border-dim);background:var(--surface-2)}
 .emp-badge-card.unlocked{border-color:rgba(0,200,150,.35);background:var(--accent-green-dim)}
+.emp-badge-card.locked{filter:grayscale(1);opacity:.6}
 .emp-badge-card-emoji{font-size:24px;line-height:1}
 .emp-badge-card-label{font-size:11px;font-weight:600;color:var(--text-primary)}
 .emp-badge-card-label.muted{color:var(--text-muted)}
 .emp-badge-card-status{font-size:9.5px;font-weight:700;color:var(--accent-green);text-transform:uppercase;letter-spacing:.04em}
+.emp-badge-card-status.locked{color:var(--text-muted)}
 
 .emp-xpflash-wrap{position:fixed;top:100px;left:50%;transform:translateX(-50%);z-index:60;pointer-events:none;
   display:flex;flex-direction:column;align-items:center}
@@ -992,12 +994,7 @@ function BottomSheet({ title, onClose, children }) {
 // Espejo ligero de LEVELS/BADGES en apps/api/src/lib/gamification.ts —
 // solo para mostrar etiquetas humanas, la fuente de verdad es el backend.
 
-const LEVEL_UNLOCK_LABEL = {
-  2: "el curso básico",
-  3: "el logro Constante 💪",
-  4: "el curso avanzado",
-  5: "el logro Élite 👑",
-};
+const LEVEL_LABELS = { 1: "Inicio", 2: "Aprendiz", 3: "Constante", 4: "Avanzado", 5: "Élite" };
 
 const STREAK_MILESTONES = [7, 30, 100];
 const STREAK_BONUS_XP = { 7: 25, 30: 100, 100: 500 };
@@ -1019,7 +1016,7 @@ function XpLevelCard({ data }) {
 
   const nextLevel = data.xp_level < 5 ? data.xp_level + 1 : null;
   const nextLevelMinXp = nextLevel ? data.xp_total + data.xp_to_next_level : null;
-  const nextUnlock = nextLevel ? LEVEL_UNLOCK_LABEL[nextLevel] : null;
+  const nextLevelLabel = nextLevel ? LEVEL_LABELS[nextLevel] : null;
   const maxXp = nextLevel ? nextLevelMinXp : data.xp_total;
 
   return (
@@ -1034,7 +1031,7 @@ function XpLevelCard({ data }) {
       </div>
       <div className="emp-muted" style={{ fontSize: 11.5, marginTop: 10, lineHeight: 1.5 }}>
         💡 Ganas 10 XP cada día sin faltas.
-        {nextUnlock && ` Al llegar a ${nextLevelMinXp} XP desbloqueas ${nextUnlock}.`}
+        {nextLevelLabel && ` Te faltan ${data.xp_to_next_level} XP para ${nextLevelLabel}.`}
       </div>
     </div>
   );
@@ -1063,10 +1060,10 @@ function RachaCard({ data }) {
       <div className="emp-muted" style={{ fontSize: 11.5, marginTop: 10, lineHeight: 1.5 }}>
         {nextMilestone
           ? `Próximo hito: ${nextMilestone} días (${nextMilestone - data.streak_days} más)`
-          : "🏆 Ya alcanzaste el hito máximo de racha"}
+          : "¡Racha máxima! 👑"}
         <br />
-        💡 Días seguidos sin faltas ni retardos.
-        {nextMilestone && ` A los ${nextMilestone} días: ${STREAK_BONUS_XP[nextMilestone]} XP de bono.`}
+        💡 Días seguidos sin faltas.
+        {nextMilestone && ` A los ${nextMilestone} días: +${STREAK_BONUS_XP[nextMilestone]} XP de bonus.`}
       </div>
     </div>
   );
@@ -1088,12 +1085,13 @@ function BadgesSection({ badges }) {
                 <>
                   <div className="emp-badge-card-emoji">{b.emoji}</div>
                   <div className="emp-badge-card-label">{b.label}</div>
-                  <div className="emp-badge-card-status">Desbloqueado</div>
+                  <div className="emp-badge-card-status">Desbloqueado ✓</div>
                 </>
               ) : (
                 <>
                   <Lock size={20} color="var(--text-muted)" />
                   <div className="emp-badge-card-label muted">{b.label}</div>
+                  <div className="emp-badge-card-status locked">Bloqueado</div>
                 </>
               )}
             </div>
