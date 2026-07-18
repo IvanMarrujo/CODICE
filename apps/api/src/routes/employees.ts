@@ -298,6 +298,13 @@ router.get('/:id', requireHR, async (req: Request, res: Response, next: NextFunc
 // El propio colaborador ve su progreso; RH puede consultar el de
 // cualquiera (Expediente → tab Perfil).
 
+const GAMIFICATION_DEFAULTS = {
+  xp_total: 0, xp_level: 1, level_label: 'Inicio', streak_days: 0,
+  badges: BADGES.map((b) => ({ ...b, unlocked: false })),
+  xp_to_next_level: 100, progress_pct: 0,
+  recent_events: [] as unknown[], unlocked_courses: [] as string[],
+}
+
 router.get('/:id/gamification', requireEmployee, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const tenantId = req.tenant.id
@@ -307,7 +314,15 @@ router.get('/:id/gamification', requireEmployee, async (req: Request, res: Respo
     }
 
     const employee = await findEmployeeOr404(req.tenantDb, tenantId, targetId)
-    const { label, xpToNext, progressPct } = calculateLevel(employee.xp_points)
+
+    // `badges`/`xp_events` son un backfill (ver scripts/migrateGamification.ts)
+    // — en un tenant donde todavía no corrió, `employee.badges` sale
+    // undefined (columna inexistente en un SELECT *) y la tabla `xp_events`
+    // ni existe. Ninguno de los dos debe tumbar el endpoint: el colaborador
+    // simplemente ve su progreso en cero hasta que el backfill corra.
+    const xpTotal    = employee.xp_points ?? 0
+    const xpLevel    = employee.xp_level ?? 1
+    const streakDays = employee.streak_days ?? 0
     const earnedBadges: string[] = Array.isArray(employee.badges) ? employee.badges : []
 
     const recentEvents = await req.tenantDb.$queryRaw<any[]>`
@@ -316,21 +331,31 @@ router.get('/:id/gamification', requireEmployee, async (req: Request, res: Respo
       WHERE employee_id = ${targetId}
       ORDER BY created_at DESC
       LIMIT 10
-    `
+    `.catch((err: any) => {
+      console.error(`⚠️  gamification: xp_events no disponible todavía para tenant ${tenantId} (¿falta migrateGamification.ts?):`, err.message)
+      return [] as any[]
+    })
+
+    const { label, xpToNext, progressPct } = calculateLevel(xpTotal)
 
     res.json({
-      xp_total:           employee.xp_points,
-      xp_level:           employee.xp_level,
+      xp_total:           xpTotal,
+      xp_level:            xpLevel,
       level_label:        label,
-      streak_days:        employee.streak_days,
+      streak_days:        streakDays,
       badges:             BADGES.map((b) => ({ ...b, unlocked: earnedBadges.includes(b.id) })),
       xp_to_next_level:   xpToNext,
       progress_pct:       progressPct,
       recent_events:      recentEvents,
-      unlocked_courses:   unlockedCourses(employee.xp_level),
+      unlocked_courses:   unlockedCourses(xpLevel),
     })
-  } catch (err) {
-    next(err)
+  } catch (err: any) {
+    // Cualquier otra falla inesperada (ej. tabla `employees` sin las
+    // columnas de gamificación todavía) — el colaborador ve valores en
+    // cero en vez de un 500, y el detalle queda logueado para RH/soporte.
+    console.error(`❌  GET /employees/${req.params.id}/gamification falló:`, err.message)
+    if (err instanceof AppError) return next(err)
+    res.json(GAMIFICATION_DEFAULTS)
   }
 })
 
