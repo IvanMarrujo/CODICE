@@ -124,6 +124,10 @@ function summarizeChange(delta: Delta): string {
   return `${delta.code}: ${headline} ${c.from ?? '—'} → ${c.to}`
 }
 
+// debounceMs: 800ms — balance entre protección contra escrituras parciales
+// y sensación de tiempo real. Nomipaq escribe el archivo de forma atómica
+// al guardar, así que 800ms es suficiente contra lecturas parciales.
+// Menor = sync más rápido. Mayor = más seguro en unidades de red lentas.
 export function startWatchers(config: AgentConfig, wsClient: AgentWSClient, diffEngine: DiffEngine): void {
   const debounceTimers = new Map<string, NodeJS.Timeout>()
   const dbfState = loadDbfState()

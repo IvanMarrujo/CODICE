@@ -16,6 +16,6 @@
       "enabled": false
     }
   ],
-  "debounceMs": 3000,
+  "debounceMs": 800,
   "heartbeatIntervalSeconds": 60
 }
