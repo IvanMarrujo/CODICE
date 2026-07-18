@@ -31,7 +31,7 @@ import {
   fetchVacationPolicy, updateVacationPolicy, fetchStorageStatus, downloadNdaPreview,
   fetchRiskSummary, fetchRiskNarrative,
   fetchContractsExpiringSoon, consultAIStream,
-  fetchDeptRiskProfiles, updateDeptRiskProfile, logDeptAccidente,
+  fetchDeptRiskProfiles, updateDeptRiskProfile,
   fetchRadarLatest, refreshRadar,
   fetchEmployeeGamification, fetchGamificationLeaderboard,
   fetchZktecoDevices, registerZktecoDevice, deleteZktecoDevice,
@@ -3058,7 +3058,61 @@ function VacationPolicyPanel({ token }) {
 
 const RADAR_URGENCY_COLOR = { alta: "var(--rose)", media: "var(--amber)", baja: "var(--cyan)" };
 const RADAR_URGENCY_LABEL = { alta: "🔴 ALTA", media: "🟡 MEDIA", baja: "🔵 BAJA" };
-const EXAMEN_OPCIONES = ["trimestral", "cuatrimestral", "semestral", "anual"];
+const EXAMEN_OPCIONES = ["mensual", "bimestral", "trimestral", "semestral", "anual"];
+
+// Semilla de riesgos por depto (NOM-030-STPS) — solo se usa para poblar el
+// formulario cuando el perfil todavía no tiene riesgos guardados; nunca se
+// persiste hasta que RH le da "Guardar cambios" (ver DeptRiskAccordion).
+const DEFAULT_RISKS_BY_DEPT = {
+  "Producción": [
+    { nombre: "Lesiones por maquinaria", frecuencia: "Alta" },
+    { nombre: "Ruido industrial", frecuencia: "Alta" },
+    { nombre: "Temperaturas extremas", frecuencia: "Media" },
+    { nombre: "Posturas forzadas repetitivas", frecuencia: "Media" },
+    { nombre: "Contacto con sustancias químicas", frecuencia: "Baja" },
+  ],
+  "Empaque": [
+    { nombre: "Movimientos repetitivos", frecuencia: "Alta" },
+    { nombre: "Posturas forzadas", frecuencia: "Alta" },
+    { nombre: "Síndrome de túnel carpiano", frecuencia: "Media" },
+    { nombre: "Fatiga visual", frecuencia: "Baja" },
+  ],
+  "Almacén y Logística": [
+    { nombre: "Lesiones lumbares por carga", frecuencia: "Alta" },
+    { nombre: "Golpes por montacargas", frecuencia: "Alta" },
+    { nombre: "Caídas en zonas húmedas", frecuencia: "Media" },
+    { nombre: "Atrapamiento en estantes", frecuencia: "Baja" },
+  ],
+  "Calidad e Inocuidad": [
+    { nombre: "Exposición a agentes químicos", frecuencia: "Alta" },
+    { nombre: "Contacto con alérgenos alimentarios", frecuencia: "Media" },
+    { nombre: "Dermatitis por contacto", frecuencia: "Media" },
+    { nombre: "Fatiga por trabajo de pie", frecuencia: "Baja" },
+  ],
+  "Mantenimiento": [
+    { nombre: "Riesgo eléctrico", frecuencia: "Alta" },
+    { nombre: "Trabajos en altura", frecuencia: "Alta" },
+    { nombre: "Quemaduras", frecuencia: "Media" },
+    { nombre: "Cortes y laceraciones", frecuencia: "Media" },
+    { nombre: "Exposición a vapores", frecuencia: "Baja" },
+  ],
+  "Recursos Humanos": [
+    { nombre: "Estrés laboral crónico", frecuencia: "Alta" },
+    { nombre: "Sedentarismo", frecuencia: "Media" },
+    { nombre: "Problemas posturales", frecuencia: "Media" },
+    { nombre: "Fatiga visual por pantallas", frecuencia: "Baja" },
+  ],
+  "Administración": [
+    { nombre: "Estrés laboral", frecuencia: "Media" },
+    { nombre: "Sedentarismo", frecuencia: "Media" },
+    { nombre: "Fatiga visual por pantallas", frecuencia: "Media" },
+    { nombre: "Problemas posturales", frecuencia: "Baja" },
+  ],
+};
+const DEFAULT_RISKS = [
+  { nombre: "Riesgo general de trabajo", frecuencia: "Media" },
+  { nombre: "Fatiga laboral", frecuencia: "Baja" },
+];
 
 function nextMonday7am(from) {
   const d = new Date(from || Date.now());
@@ -3138,30 +3192,76 @@ function RadarAlertCard({ item, reviewed, onToggleReviewed }) {
   );
 }
 
+const DEPT_PROFILE_BLANK = { edadRecomendada: "", examenRequerido: "anual", condicionesIncompatibles: [], certificacionesRequeridas: [] };
+
+// Deriva el estado local editable a partir del perfil guardado — separado
+// del componente para poder llamarlo tanto en la inicialización lazy de
+// useState como en el efecto que resetea al cambiar de depto/perfil.
+function deriveDeptRiskState(department, profile) {
+  const po = profile?.perfil_optimo || {};
+  // Compat: perfiles sembrados antes de este cambio guardaron edadMin/edadMax
+  // por separado — se sintetiza el texto libre a partir de esos si no existe
+  // edadRecomendada todavía.
+  const edadRecomendada = po.edadRecomendada
+    ?? (po.edadMin != null && po.edadMax != null ? `${po.edadMin}-${po.edadMax} años` : "");
+  const perfil = { ...DEPT_PROFILE_BLANK, ...po, edadRecomendada };
+
+  const riesgosGuardados = profile?.riesgos_ocupacionales || [];
+  const usingDefaultRiesgos = riesgosGuardados.length === 0;
+  const riesgos = usingDefaultRiesgos
+    ? (DEFAULT_RISKS_BY_DEPT[department] || DEFAULT_RISKS).map((r) => ({ ...r }))
+    : riesgosGuardados;
+
+  const historial = profile?.historial_accidentes || [];
+
+  return { perfil, riesgos, historial, usingDefaultRiesgos };
+}
+
+function tempRowId() {
+  return typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `tmp_${Math.random().toString(36).slice(2)}`;
+}
+
 function DeptRiskAccordion({ token, department, profile, onSaved }) {
   const [open, setOpen] = useState(false);
-  const blank = { edadMin: "", edadMax: "", examenRequerido: "anual", condicionesIncompatibles: [] };
-  const [perfil, setPerfil] = useState(() => ({ ...blank, ...(profile?.perfil_optimo || {}) }));
-  const [riesgos, setRiesgos] = useState(profile?.riesgos_ocupacionales || []);
+  const initial = deriveDeptRiskState(department, profile);
+  const [perfil, setPerfil] = useState(initial.perfil);
+  const [riesgos, setRiesgos] = useState(initial.riesgos);
+  const [historial, setHistorial] = useState(initial.historial);
+  const [usingDefaultRiesgos, setUsingDefaultRiesgos] = useState(initial.usingDefaultRiesgos);
   const [condInput, setCondInput] = useState("");
+  const [certInput, setCertInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const [accForm, setAccForm] = useState({ fecha: todayISO, tipo: "", severidad: "leve", descripcion: "" });
-  const [accBusy, setAccBusy] = useState(false);
+  const savedSnapshotRef = useRef(JSON.stringify({ perfil: initial.perfil, riesgos: initial.riesgos, historial: initial.historial }));
 
   useEffect(() => {
-    setPerfil({ ...blank, ...(profile?.perfil_optimo || {}) });
-    setRiesgos(profile?.riesgos_ocupacionales || []);
+    const next = deriveDeptRiskState(department, profile);
+    setPerfil(next.perfil);
+    setRiesgos(next.riesgos);
+    setHistorial(next.historial);
+    setUsingDefaultRiesgos(next.usingDefaultRiesgos);
+    savedSnapshotRef.current = JSON.stringify({ perfil: next.perfil, riesgos: next.riesgos, historial: next.historial });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [department, profile]);
 
-  const historial = profile?.historial_accidentes || [];
+  const dirty = JSON.stringify({ perfil, riesgos, historial }) !== savedSnapshotRef.current;
+
+  // Confirma con el usuario antes de cerrar el navegador/pestaña con
+  // cambios sin guardar en cualquier depto abierto.
+  useEffect(() => {
+    if (!dirty) return;
+    const handler = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [dirty]);
+
   const fuentes = profile?.fuentes_normativas || [];
   const { score, status } = deptComplianceScore(profile);
 
-  const addRiesgo = () => setRiesgos((r) => [...r, { nombre: "", frecuencia: "Media" }]);
-  const setRiesgo = (i, field, val) => setRiesgos((r) => r.map((x, j) => (j === i ? { ...x, [field]: val } : x)));
-  const delRiesgo = (i) => setRiesgos((r) => r.filter((_, j) => j !== i));
+  const addRiesgo = () => { setUsingDefaultRiesgos(false); setRiesgos((r) => [...r, { nombre: "", frecuencia: "Media" }]); };
+  const setRiesgo = (i, field, val) => { setUsingDefaultRiesgos(false); setRiesgos((r) => r.map((x, j) => (j === i ? { ...x, [field]: val } : x))); };
+  const delRiesgo = (i) => { setUsingDefaultRiesgos(false); setRiesgos((r) => r.filter((_, j) => j !== i)); };
+
   const addCondicion = () => {
     const v = condInput.trim();
     if (!v) return;
@@ -3170,35 +3270,44 @@ function DeptRiskAccordion({ token, department, profile, onSaved }) {
   };
   const delCondicion = (i) => setPerfil((p) => ({ ...p, condicionesIncompatibles: p.condicionesIncompatibles.filter((_, j) => j !== i) }));
 
+  const addCertificacion = () => {
+    const v = certInput.trim();
+    if (!v) return;
+    setPerfil((p) => ({ ...p, certificacionesRequeridas: [...(p.certificacionesRequeridas || []), v] }));
+    setCertInput("");
+  };
+  const delCertificacion = (i) => setPerfil((p) => ({ ...p, certificacionesRequeridas: p.certificacionesRequeridas.filter((_, j) => j !== i) }));
+
+  const addAccidente = () => setHistorial((h) => [...h, { id: tempRowId(), fecha: todayISO, tipo: "", severidad: "leve", descripcion: "" }]);
+  const setAccidente = (i, field, val) => setHistorial((h) => h.map((x, j) => (j === i ? { ...x, [field]: val } : x)));
+  const delAccidente = (i) => setHistorial((h) => h.filter((_, j) => j !== i));
+
   const guardar = async () => {
     setBusy(true); setError(null);
     try {
       const saved = await updateDeptRiskProfile(token, department, {
         perfilOptimo: perfil,
         riesgosOcupacionales: riesgos,
+        historialAccidentes: historial,
       });
       onSaved(saved);
-      toast(`Perfil de riesgo guardado · ${department}`);
+      setUsingDefaultRiesgos(false);
+      savedSnapshotRef.current = JSON.stringify({ perfil, riesgos, historial });
+      toast("Cambios guardados");
     } catch (e) {
       setError(e.message);
+      toast("Error al guardar", "no");
     } finally {
       setBusy(false);
     }
   };
 
-  const registrarAccidente = async () => {
-    if (!accForm.tipo || !accForm.descripcion) { setError("Tipo y descripción son obligatorios"); return; }
-    setAccBusy(true); setError(null);
-    try {
-      const saved = await logDeptAccidente(token, department, accForm);
-      onSaved(saved);
-      setAccForm({ fecha: todayISO, tipo: "", severidad: "leve", descripcion: "" });
-      toast("Accidente registrado");
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setAccBusy(false);
+  const toggleOpen = () => {
+    if (open && dirty) {
+      const ok = window.confirm(`Tienes cambios sin guardar en "${department}". ¿Salir sin guardar?`);
+      if (!ok) return;
     }
+    setOpen((o) => !o);
   };
 
   const STATUS_BADGE = {
@@ -3209,101 +3318,121 @@ function DeptRiskAccordion({ token, department, profile, onSaved }) {
 
   return (
     <div className="glass" style={{ padding: 0, overflow: "hidden", marginBottom: 12 }}>
-      <div className="row" style={{ padding: "14px 16px", justifyContent: "space-between", cursor: "pointer" }} onClick={() => setOpen((o) => !o)}>
+      <div className="row" style={{ padding: "14px 16px", justifyContent: "space-between", cursor: "pointer" }} onClick={toggleOpen}>
         <div className="row" style={{ gap: 10 }}>
           <ChevronDown size={16} style={{ transform: open ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform .15s", color: "var(--muted2)" }} />
           <span style={{ fontWeight: 700, fontSize: 13.5, textTransform: "uppercase", letterSpacing: ".02em" }}>{department}</span>
         </div>
-        <span className="chip" style={{ color: STATUS_BADGE.color }}>{STATUS_BADGE.icon} {STATUS_BADGE.label} · {score}</span>
+        <div className="row" style={{ gap: 8 }}>
+          {dirty && <span className="chip" style={{ color: "var(--amber)" }}>⚠ Cambios sin guardar</span>}
+          <span className="chip" style={{ color: STATUS_BADGE.color }}>{STATUS_BADGE.icon} {STATUS_BADGE.label} · {score}</span>
+        </div>
       </div>
 
-      {open && (
-        <div style={{ padding: "4px 16px 18px", borderTop: "1px solid var(--border)" }}>
-          <div style={{ fontWeight: 600, fontSize: 12, margin: "14px 0 8px", color: "var(--muted)" }}>PERFIL ÓPTIMO DEL PUESTO</div>
-          <div className="row" style={{ gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-            <div style={{ flex: "1 1 120px" }}>
-              <label className="fld">Edad recomendada — mín.</label>
-              <input className="input" type="number" value={perfil.edadMin} onChange={(e) => setPerfil((p) => ({ ...p, edadMin: e.target.value === "" ? "" : Number(e.target.value) }))} />
-            </div>
-            <div style={{ flex: "1 1 120px" }}>
-              <label className="fld">Edad recomendada — máx.</label>
-              <input className="input" type="number" value={perfil.edadMax} onChange={(e) => setPerfil((p) => ({ ...p, edadMax: e.target.value === "" ? "" : Number(e.target.value) }))} />
-            </div>
-            <div style={{ flex: "1 1 160px" }}>
-              <label className="fld">Examen médico</label>
-              <select className="select" value={perfil.examenRequerido} onChange={(e) => setPerfil((p) => ({ ...p, examenRequerido: e.target.value }))}>
-                {EXAMEN_OPCIONES.map((o) => <option key={o} value={o}>{o[0].toUpperCase() + o.slice(1)}</option>)}
-              </select>
-            </div>
-          </div>
-          <label className="fld">Condiciones incompatibles</label>
-          <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-            {(perfil.condicionesIncompatibles || []).map((c, i) => (
-              <span key={i} className="chip" style={{ color: "var(--rose)" }}>{c}<X size={11} style={{ cursor: "pointer", marginLeft: 4 }} onClick={() => delCondicion(i)} /></span>
-            ))}
-          </div>
-          <div className="row" style={{ gap: 8, marginBottom: 18 }}>
-            <input className="input" placeholder="Ej. hernias_sin_operar" value={condInput} onChange={(e) => setCondInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addCondicion())} />
-            <button className="btn btn-sm" onClick={addCondicion}><Plus size={12} />Agregar</button>
-          </div>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            initial={{ maxHeight: 0, opacity: 0 }}
+            animate={{ maxHeight: 3000, opacity: 1, transition: { maxHeight: { duration: 0.35, ease: [0.4, 0, 0.2, 1] }, opacity: { duration: 0.25 } } }}
+            exit={{ maxHeight: 0, opacity: 0, transition: { duration: 0.25, ease: [0.4, 0, 1, 1] } }}
+            style={{ overflow: "hidden" }}
+          >
+            <div style={{ padding: "4px 16px 18px", borderTop: "1px solid var(--border)" }}>
+              <div style={{ fontWeight: 600, fontSize: 12, margin: "14px 0 8px", color: "var(--muted)" }}>PERFIL ÓPTIMO DEL PUESTO</div>
+              <div className="row" style={{ gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                <div style={{ flex: "1 1 180px" }}>
+                  <label className="fld">Edad recomendada</label>
+                  <input className="input" placeholder="Ej. 25-45 años" value={perfil.edadRecomendada} onChange={(e) => setPerfil((p) => ({ ...p, edadRecomendada: e.target.value }))} />
+                </div>
+                <div style={{ flex: "1 1 160px" }}>
+                  <label className="fld">Examen médico</label>
+                  <select className="select" value={perfil.examenRequerido} onChange={(e) => setPerfil((p) => ({ ...p, examenRequerido: e.target.value }))}>
+                    {EXAMEN_OPCIONES.map((o) => <option key={o} value={o}>{o[0].toUpperCase() + o.slice(1)}</option>)}
+                  </select>
+                </div>
+              </div>
 
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <div style={{ fontWeight: 600, fontSize: 12, color: "var(--muted)" }}>RIESGOS OCUPACIONALES</div>
-          </div>
-          {riesgos.map((r, i) => (
-            <div key={i} className="row" style={{ gap: 8, marginTop: 8 }}>
-              <input className="input" style={{ flex: 1 }} value={r.nombre} onChange={(e) => setRiesgo(i, "nombre", e.target.value)} placeholder="Nombre del riesgo" />
-              <select className="select" style={{ width: 110 }} value={r.frecuencia} onChange={(e) => setRiesgo(i, "frecuencia", e.target.value)}>
-                <option>Alta</option><option>Media</option><option>Baja</option>
-              </select>
-              <X size={15} style={{ cursor: "pointer", color: "var(--muted2)" }} onClick={() => delRiesgo(i)} />
-            </div>
-          ))}
-          <button className="btn btn-sm" style={{ marginTop: 10 }} onClick={addRiesgo}><Plus size={12} />Agregar riesgo</button>
+              <label className="fld">Condiciones incompatibles</label>
+              <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                {(perfil.condicionesIncompatibles || []).map((c, i) => (
+                  <span key={i} className="chip" style={{ color: "var(--rose)" }}>{c}<X size={11} style={{ cursor: "pointer", marginLeft: 4 }} onClick={() => delCondicion(i)} /></span>
+                ))}
+              </div>
+              <div className="row" style={{ gap: 8, marginBottom: 18 }}>
+                <input className="input" placeholder="Ej. hernias_sin_operar" value={condInput} onChange={(e) => setCondInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addCondicion())} />
+                <button className="btn btn-sm" onClick={addCondicion}><Plus size={12} />Agregar</button>
+              </div>
 
-          <div style={{ fontWeight: 600, fontSize: 12, margin: "20px 0 8px", color: "var(--muted)" }}>HISTORIAL DE ACCIDENTES</div>
-          {historial.length === 0 ? (
-            <div className="muted" style={{ fontSize: 12.5, marginBottom: 10 }}>Sin accidentes registrados.</div>
-          ) : (
-            <div style={{ marginBottom: 10 }}>
-              {[...historial].sort((a, b) => new Date(b.fecha) - new Date(a.fecha)).map((a) => (
-                <div key={a.id} className="row" style={{ gap: 8, fontSize: 12, padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
-                  <span className="mono muted2">{a.fecha}</span>
-                  <span className="chip" style={{ color: a.severidad === "grave" ? "var(--rose)" : a.severidad === "moderado" ? "var(--amber)" : "var(--muted)" }}>{a.severidad}</span>
-                  <span style={{ fontWeight: 500 }}>{a.tipo}</span>
-                  <span className="muted" style={{ flex: 1 }}>{a.descripcion}</span>
+              <label className="fld">Certificaciones requeridas</label>
+              <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                {(perfil.certificacionesRequeridas || []).map((c, i) => (
+                  <span key={i} className="chip" style={{ color: "var(--cyan)" }}>{c}<X size={11} style={{ cursor: "pointer", marginLeft: 4 }} onClick={() => delCertificacion(i)} /></span>
+                ))}
+              </div>
+              <div className="row" style={{ gap: 8, marginBottom: 18 }}>
+                <input className="input" placeholder="Ej. NOM-030-STPS vigente" value={certInput} onChange={(e) => setCertInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addCertificacion())} />
+                <button className="btn btn-sm" onClick={addCertificacion}><Plus size={12} />Agregar</button>
+              </div>
+
+              <div className="row" style={{ justifyContent: "space-between" }}>
+                <div style={{ fontWeight: 600, fontSize: 12, color: "var(--muted)" }}>RIESGOS OCUPACIONALES</div>
+              </div>
+              {riesgos.map((r, i) => (
+                <div key={i} className="row" style={{ gap: 8, marginTop: 8 }}>
+                  <input className="input" style={{ flex: 1 }} value={r.nombre} onChange={(e) => setRiesgo(i, "nombre", e.target.value)} placeholder="Nombre del riesgo" />
+                  <select className="select" style={{ width: 110 }} value={r.frecuencia} onChange={(e) => setRiesgo(i, "frecuencia", e.target.value)}>
+                    <option>Alta</option><option>Media</option><option>Baja</option>
+                  </select>
+                  <X size={15} style={{ cursor: "pointer", color: "var(--muted2)" }} onClick={() => delRiesgo(i)} />
                 </div>
               ))}
-            </div>
-          )}
-          <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-            <input className="input" type="date" style={{ width: 140 }} value={accForm.fecha} onChange={(e) => setAccForm((f) => ({ ...f, fecha: e.target.value }))} />
-            <input className="input" style={{ flex: "1 1 140px" }} placeholder="Tipo (ej. caída, corte)" value={accForm.tipo} onChange={(e) => setAccForm((f) => ({ ...f, tipo: e.target.value }))} />
-            <select className="select" style={{ width: 110 }} value={accForm.severidad} onChange={(e) => setAccForm((f) => ({ ...f, severidad: e.target.value }))}>
-              <option value="leve">Leve</option><option value="moderado">Moderado</option><option value="grave">Grave</option>
-            </select>
-            <input className="input" style={{ flex: "2 1 200px" }} placeholder="Descripción" value={accForm.descripcion} onChange={(e) => setAccForm((f) => ({ ...f, descripcion: e.target.value }))} />
-            <button className="btn btn-sm" disabled={accBusy} onClick={registrarAccidente}><Plus size={12} />Registrar accidente</button>
-          </div>
+              <button className="btn btn-sm" style={{ marginTop: 10 }} onClick={addRiesgo}><Plus size={12} />Agregar riesgo</button>
+              {usingDefaultRiesgos && (
+                <div className="muted2" style={{ fontSize: 11, fontStyle: "italic", marginTop: 8 }}>
+                  Riesgos sugeridos según NOM-030-STPS · Edita o elimina según tu operación
+                </div>
+              )}
 
-          <div style={{ fontWeight: 600, fontSize: 12, margin: "20px 0 8px", color: "var(--muted)" }}>FUENTES NORMATIVAS</div>
-          <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
-            {fuentes.length === 0
-              ? <span className="muted" style={{ fontSize: 12.5 }}>Sin normas asociadas todavía.</span>
-              : fuentes.map((n, i) => (
-                <a key={i} href={n.url} target="_blank" rel="noreferrer" className="chip" style={{ color: "var(--cyan)", textDecoration: "none" }}>
-                  <Tag size={10} />{n.clave}
-                </a>
+              <div style={{ fontWeight: 600, fontSize: 12, margin: "20px 0 8px", color: "var(--muted)" }}>HISTORIAL DE ACCIDENTES</div>
+              {historial.length === 0 && (
+                <div className="muted" style={{ fontSize: 12.5, marginBottom: 10 }}>Sin accidentes registrados.</div>
+              )}
+              {historial.map((a, i) => (
+                <div key={a.id ?? i} className="row" style={{ gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                  <input className="input" type="date" style={{ width: 140 }} value={a.fecha ? String(a.fecha).slice(0, 10) : ""} onChange={(e) => setAccidente(i, "fecha", e.target.value)} />
+                  <input className="input" style={{ flex: "1 1 140px" }} placeholder="Tipo (ej. caída, corte)" value={a.tipo} onChange={(e) => setAccidente(i, "tipo", e.target.value)} />
+                  <select className="select" style={{ width: 110 }} value={a.severidad} onChange={(e) => setAccidente(i, "severidad", e.target.value)}>
+                    <option value="leve">Leve</option><option value="moderado">Moderado</option><option value="grave">Grave</option>
+                  </select>
+                  <textarea className="input" style={{ flex: "2 1 200px", minHeight: 38, resize: "vertical" }} placeholder="Descripción" value={a.descripcion} onChange={(e) => setAccidente(i, "descripcion", e.target.value)} />
+                  <X size={15} style={{ cursor: "pointer", color: "var(--muted2)", flexShrink: 0, marginTop: 10 }} onClick={() => delAccidente(i)} />
+                </div>
               ))}
-          </div>
+              <button className="btn btn-sm" style={{ marginTop: 10 }} onClick={addAccidente}><Plus size={12} />Registrar accidente</button>
 
-          {error && <div style={{ fontSize: 12.5, color: "var(--rose)", marginBottom: 10 }}>{error}</div>}
-          <button className="btn btn-accent" disabled={busy} onClick={guardar}>{busy ? "Guardando…" : "Guardar cambios para este departamento"}</button>
-          <div className="muted2" style={{ fontSize: 11, marginTop: 10 }}>
-            Última revisión: {profile?.ultima_revision ? fmtDate2(profile.ultima_revision) : "—"}{profile?.updated_by ? ` por ${profile.updated_by}` : ""}
-          </div>
-        </div>
-      )}
+              <div style={{ fontWeight: 600, fontSize: 12, margin: "20px 0 8px", color: "var(--muted)" }}>FUENTES NORMATIVAS</div>
+              <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 16 }}>
+                {fuentes.length === 0
+                  ? <span className="muted" style={{ fontSize: 12.5 }}>Sin normas asociadas todavía.</span>
+                  : fuentes.map((n, i) => (
+                    <a key={i} href={n.url} target="_blank" rel="noreferrer" className="chip" style={{ color: "var(--cyan)", textDecoration: "none" }}>
+                      <Tag size={10} />{n.clave}
+                    </a>
+                  ))}
+              </div>
+
+              {error && <div style={{ fontSize: 12.5, color: "var(--rose)", marginBottom: 10 }}>{error}</div>}
+              <div className="row" style={{ gap: 10, alignItems: "center" }}>
+                <button className="btn btn-accent" disabled={busy} onClick={guardar}>{busy ? "Guardando…" : `Guardar cambios · ${department}`}</button>
+                {dirty && <span className="muted2" style={{ fontSize: 11, color: "var(--amber)" }}>⚠ Cambios sin guardar</span>}
+              </div>
+              <div className="muted2" style={{ fontSize: 11, marginTop: 10 }}>
+                Última revisión: {profile?.ultima_revision ? fmtDate2(profile.ultima_revision) : "—"}{profile?.updated_by ? ` por ${profile.updated_by}` : ""}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
