@@ -2423,10 +2423,19 @@ function ConnectedSourceCard({ token, socket, source, onChanged, tenantId, agent
       <div className="mono muted2" style={{ fontSize: 11, marginBottom: 12 }}>Checksum: {source.checksum.slice(0, 8)}…</div>
       {source.lastError && <div style={{ color: "var(--rose)", fontSize: 11.5, marginBottom: 10 }}>{source.lastError}</div>}
 
+      <div className="row" style={{ gap: 7 }}>
+        <span className="dot live" style={{ background: "var(--emerald)" }} />
+        <span style={{ fontSize: 12.5 }}>Sincronización automática activa</span>
+      </div>
+      <div className="muted2" style={{ fontSize: 11, marginTop: 2, marginBottom: 10 }}>Última actualización: {timeAgo(source.lastReadAt)}</div>
+
       <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-        <button className="btn btn-sm" disabled={!!busy} onClick={doReload}>
+        <button
+          className="btn btn-sm" disabled={!!busy} onClick={doReload}
+          title="El agente sincroniza automáticamente. Usa esto solo si necesitas forzar una actualización."
+        >
           <RefreshCw size={12} />
-          {busy === "reload" ? `Recargando… ${pct}%` : justUpdated ? "✓ Actualizado hace 0 min" : "Recargar ahora"}
+          {busy === "reload" ? `Recargando… ${pct}%` : justUpdated ? "✓ Actualizado hace 0 min" : "↺ Forzar sincronización"}
         </button>
         <button className="btn btn-sm" disabled={!!busy} onClick={() => fileInputRef.current?.click()}>
           <Upload size={12} />
@@ -4864,7 +4873,6 @@ export default function App() {
               ? <div key={idx} className="sec">{it[1]}</div>
               : <div key={it[0]} className={`navitem ${view === it[0] ? "on" : ""}`} onClick={() => setView(it[0])}>{React.createElement(it[2], { size: 17 })} {it[1]}</div>)}
           </nav>
-          <button className="btn" style={{ justifyContent: "center" }} onClick={() => loadFromApi().then(() => toast("Datos sincronizados"))}><RefreshCw size={14} />Sincronizar</button>
         </aside>
         <main style={{ flex: 1, padding: "20px 26px 40px", minWidth: 0, overflowX: "hidden" }}>
           {view === "cockpit" && <Cockpit staff={staff} solicitudes={solicitudes} resolver={resolver} go={setView} attendance={attendance} openExpediente={openExpediente} token={token} onFilterPlantillaStatus={goToPlantillaStatus} />}
