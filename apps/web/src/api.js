@@ -257,6 +257,10 @@ export function deleteConnectedSourceWithData(token, sourceId) {
 
 // ── Empleados — alta/edición/baja ─────────────────────────────
 
+export function fetchEmployee(token, id) {
+  return authedFetch(token, `/api/employees/${id}`);
+}
+
 export function createEmployee(token, payload) {
   return authedFetchJSON(token, `/api/employees`, "POST", payload);
 }
