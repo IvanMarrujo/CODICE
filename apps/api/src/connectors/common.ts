@@ -13,6 +13,7 @@ export interface EmployeeUpsertRow {
   nss?:           string
   daily_salary?:  number
   monthly_salary?: number
+  salary_base_imss?: number
   department?:    string
   position?:      string
   plant?:         string

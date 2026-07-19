@@ -247,7 +247,7 @@ router.post('/preview/cfdi', requireHR, handlePreviewCfdiUpload, async (req: Req
 // ── Columnas de `employees` que estos conectores pueden escribir ─
 
 export const WRITABLE_EMPLOYEE_COLUMNS: (keyof EmployeeUpsertRow)[] = [
-  'first_name', 'last_name', 'rfc', 'curp', 'nss', 'daily_salary', 'monthly_salary',
+  'first_name', 'last_name', 'rfc', 'curp', 'nss', 'daily_salary', 'monthly_salary', 'salary_base_imss',
   'department', 'position', 'plant', 'shift', 'hire_date',
   'contract_type', 'status', 'employee_code', 'bank_name', 'bank_clabe', 'notes',
 ]

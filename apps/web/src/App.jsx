@@ -34,6 +34,7 @@ import {
   fetchDeptRiskProfiles, updateDeptRiskProfile, logDeptAccidente,
   fetchRadarLatest, refreshRadar,
   fetchEmployeeGamification, fetchGamificationLeaderboard,
+  fetchEmployee,
   fetchZktecoDevices, registerZktecoDevice, deleteZktecoDevice,
 } from "./api.js";
 
@@ -764,6 +765,17 @@ function useEmployeeGamification(token, employeeId) {
   return state;
 }
 
+function useEmployeeDetail(token, employeeId) {
+  const [state, setState] = useState({ status: "loading", data: null });
+  useEffect(() => {
+    if (!token || !employeeId) return;
+    fetchEmployee(token, employeeId)
+      .then((data) => setState({ status: "ready", data }))
+      .catch((e) => setState({ status: "error", data: null, error: e.message }));
+  }, [token, employeeId]);
+  return state;
+}
+
 function useGamificationLeaderboard(token, limit = 5) {
   const [state, setState] = useState({ status: "loading", data: [] });
   useEffect(() => {
@@ -1186,6 +1198,29 @@ function GamificationSummaryCard({ token, employeeId }) {
   );
 }
 
+function SbcCard({ token, employeeId }) {
+  const detail = useEmployeeDetail(token, employeeId);
+  if (detail.status === "loading") return null;
+  const emp = detail.data;
+  const sbc = emp?.salary_base_imss != null ? Number(emp.salary_base_imss) : null;
+  if (sbc == null) return null;
+  const dailySalary = emp?.daily_salary != null ? Number(emp.daily_salary) : null;
+  const factor = dailySalary ? sbc / dailySalary : null;
+
+  return (
+    <div
+      className="glass-2" style={{ padding: 14, marginBottom: 18 }}
+      title="El SBC incluye proporcionales de aguinaldo, prima vacacional y prestaciones. Base para cálculo de cuotas IMSS."
+    >
+      <Eyebrow>SBC (Salario Base Cotización IMSS)</Eyebrow>
+      <div className="mono" style={{ fontSize: 18, fontWeight: 700, marginTop: 6 }}>{mxn2(sbc)}</div>
+      {factor != null && (
+        <div className="muted2" style={{ fontSize: 10, marginTop: 4 }}>Factor integración: {factor.toFixed(4)}</div>
+      )}
+    </div>
+  );
+}
+
 function ResumenTab({ e, setStatus, update, token }) {
   const dv = diasVacaciones(e.antiguedad); const sd = e.salario / 30;
   return (
@@ -1199,6 +1234,7 @@ function ResumenTab({ e, setStatus, update, token }) {
       </div>
       <Eyebrow>Tipo de contrato</Eyebrow>
       <select className="select" style={{ margin: "9px 0 18px" }} value={e.contrato} onChange={(ev) => update({ contrato: ev.target.value })}>{CONTRATOS.map((c) => <option key={c}>{c}</option>)}</select>
+      <SbcCard token={token} employeeId={e.dbId} />
       <GamificationSummaryCard token={token} employeeId={e.dbId} />
       <div className="glass-2" style={{ padding: 14 }}>
         <Eyebrow>Derechos LFT estimados</Eyebrow>
@@ -1742,6 +1778,7 @@ const CODICE_FIELDS = [
   ["full_name", "Nombre completo"], ["rfc", "RFC"], ["curp", "CURP"], ["nss", "NSS (IMSS)"],
   ["employee_code", "Clave de empleado"],
   ["daily_salary", "Salario diario"], ["monthly_salary", "Salario mensual"],
+  ["salary_base_imss", "SBC (Base Cotización IMSS)"],
   ["department", "Departamento"], ["position", "Puesto"],
   ["plant", "Planta"], ["shift", "Turno"], ["hire_date", "Fecha de ingreso"],
   ["contract_type", "Tipo de contrato"], ["status", "Estatus"],

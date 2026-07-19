@@ -11,6 +11,7 @@ export type CanonicalField =
   | 'nss'
   | 'daily_salary'
   | 'monthly_salary'
+  | 'salary_base_imss'
   | 'department'
   | 'position'
   | 'plant'
@@ -37,44 +38,145 @@ export type CanonicalField =
   | 'year'
 
 const ALIASES: Record<CanonicalField, string[]> = {
-  full_name:     ['nombre', 'name', 'nombre completo'],
-  rfc:           ['rfc'],
-  curp:          ['curp'],
-  nss:           ['nss', 'num imss', 'seguro social'],
-  daily_salary:  ['salario', 'salario diario', 'sal diario', 'sueldo'],
-  department:    ['departamento', 'depto', 'area', 'área'],
-  position:      ['puesto', 'cargo', 'posicion', 'posición'],
-  plant:         ['planta', 'sucursal', 'centro'],
-  shift:         ['turno', 'shift'],
-  hire_date:     ['fecha ingreso', 'f ingreso', 'ingreso', 'hire date'],
-  contract_type: ['contrato', 'tipo contrato'],
-  status:        ['status', 'estatus', 'estado'],
+  full_name: [
+    'nombre', 'name', 'nombre completo',
+    'NOMBRES', 'APELLIDOS', 'APE_PAT', 'APE_MAT', 'NOM_EMPLEADO', 'NOMBRE_TRABAJADOR',
+  ],
+  rfc: [
+    'rfc',
+    'R_F_C', 'RFCTRABAJADOR', 'CVE_RFC',
+  ],
+  curp: [
+    'curp',
+    'C_U_R_P', 'CURPTRABAJADOR',
+  ],
+  nss: [
+    'nss', 'num imss', 'seguro social',
+    // 'IMSS' a secas NO se agrega aquí a propósito: ya es alias de
+    // imss_employee (cuota de nómina) más abajo — un header real llamado
+    // solo "IMSS" es ambiguo entre "número de afiliación" y "cuota
+    // retenida", y como ALIAS_LOOKUP es un mapa 1:1 por string normalizado,
+    // agregarlo también aquí pisaría silenciosamente ese alias existente.
+    'N_S_S', 'NUM_SEG_SOCIAL', 'NUMSEGSO', 'NO_IMSS',
+  ],
+  daily_salary: [
+    'salario', 'salario diario', 'sal diario', 'sueldo',
+    'SD', 'SAL_DIA',
+  ],
+  salary_base_imss: [
+    'salario_base_imss', 'sbc', 'salario_base_cotizacion',
+    'base_cotizacion', 'salario_cotizacion', 'sdi',
+    'salario_diario_integrado', 'salario_integrado',
+    'BASE_IMSS', 'SALARIO_BASE_IMSS', 'SBC', 'SDI',
+    'SAL_BASE_COT', 'SALARIO_BASE_COTIZACION', 'SALARIO_DIARIO_INTEGRADO',
+    'SAL_INT', 'SUELDO_INTEGRADO', 'BASE_COTIZACION',
+  ],
+  department: [
+    'departamento', 'depto', 'area', 'área',
+    'CVE_DEPTO', 'CENTRO_COSTO', 'DEPART', 'NOM_DEPTO',
+  ],
+  position: [
+    'puesto', 'cargo', 'posicion', 'posición',
+    'CVE_PUESTO', 'NOM_PUESTO', 'OCUPACION', 'CATEGORIA', 'PLAZA',
+  ],
+  plant: [
+    'planta', 'sucursal', 'centro',
+    'CVE_SUCURSAL', 'CENTRO_TRABAJO', 'UBICACION', 'LOCALIDAD',
+  ],
+  shift: [
+    'turno', 'shift',
+    'CVE_TURNO', 'JORNADA', 'HORARIO',
+  ],
+  hire_date: [
+    'fecha ingreso', 'f ingreso', 'ingreso', 'hire date',
+    'FECHA_INGRESO', 'FEC_INGRESO', 'FINGRESO', 'FECHA_ALTA', 'FEC_ALTA',
+    'FECHA_CONTRATACION', 'FCONTRAT', 'F_INGRESO',
+  ],
+  contract_type: [
+    'contrato', 'tipo contrato',
+    'TIPO_RELACION', 'MODALIDAD', 'CVE_CONTRATO', 'TIPO_EMPLEADO',
+  ],
+  status: [
+    'status', 'estatus', 'estado',
+    'CVE_STATUS', 'SITUACION', 'ACTIVO', 'BAJA',
+  ],
 
   // Alias deliberadamente mínimos (solo el nombre canónico) — headers reales
   // como "CLAVE", "SALARIO_MENSUAL", "BANCO", "CLABE" NO se auto-detectan
   // aquí a propósito: pasan por suggestField() y requieren confirmación
   // explícita del usuario (ver PART 1 del feature, "Sugerido: X").
-  monthly_salary: ['monthly_salary'],
-  employee_code:  ['employee_code'],
-  bank_name:      ['bank_name'],
-  bank_clabe:     ['bank_clabe'],
-  notes:          ['notes'],
+  // ── (Actualización: los headers reales de Nomipaq/CONTPAQi de abajo SÍ se
+  // agregan como alias exactos — ver ADDITIONAL del feature de aliases
+  // reales — y los hints ahora redundantes se quitaron de SUGGESTION_HINTS.)
+  monthly_salary: [
+    'monthly_salary',
+    'SALARIO_MENSUAL', 'SAL_MENSUAL', 'SUELDO_MENSUAL', 'SM', 'SAL_MES',
+  ],
+  employee_code: [
+    'employee_code',
+    'CLAVE', 'CVE_EMPLEADO', 'NO_EMPLEADO', 'NUM_EMP', 'CVEMP', 'NUMEMPLEADO', 'ID_EMPLEADO',
+  ],
+  bank_name: [
+    'bank_name',
+    'BANCO', 'CVE_BANCO', 'NOM_BANCO', 'INSTITUCION',
+  ],
+  bank_clabe: [
+    'bank_clabe',
+    'CLABE', 'CUENTA_CLABE', 'NUM_CUENTA', 'CUENTA_BANCARIA', 'CLABE_INTERBANCARIA',
+  ],
+  notes: ['notes'],
 
   // ── Nómina — permiten que el mismo Excel genérico (o un export real de
   // Nomipaq Excel) traiga percepciones/deducciones por fila y alimente
   // payroll_records además de employees. Ver excelParser.ts:mapRowValues.
-  gross_taxable:    ['percepciones', 'percepciones_totales', 'PERCEPCIO', 'total_percepciones', 'percepciones brutas', 'sueldo bruto'],
-  isr:              ['isr', 'i.s.r', 'retencion_isr', 'impuesto_isr', 'ISR'],
-  imss_employee:    ['imss', 'cuota_imss', 'seguro_social', 'IMSS'],
-  infonavit:        ['infonavit', 'credito_infonavit', 'INFONAVIT'],
-  other_deductions: ['otras_deducciones', 'otros_descuentos', 'prestamos'],
-  net_pay:          ['neto', 'sueldo_neto', 'importe_neto', 'NETO', 'neto_pagar'],
-  total_deductions: ['deducciones', 'total_deducciones', 'DEDUCCIONES'],
-  gross_exempt:     ['percepciones_exentas', 'exento'],
-  days_paid:        ['dias', 'dias_trabajados', 'DIAS'],
-  payment_date:     ['fecha_pago', 'f_pago', 'FECHA_PAGO', 'fecha de pago'],
-  period:           ['periodo', 'quincena', 'PERIODO', 'period'],
-  year:             ['anio', 'año', 'ANIO', 'year'],
+  gross_taxable: [
+    'percepciones', 'percepciones_totales', 'PERCEPCIO', 'total_percepciones', 'percepciones brutas', 'sueldo bruto',
+    'TOTAL_PERCEPCIONES', 'PERC_GRAV', 'GRAVADO', 'TOTAL_GRAVADO', 'IMPORTE_GRAVADO',
+  ],
+  isr: [
+    'isr', 'i.s.r', 'retencion_isr', 'impuesto_isr', 'ISR',
+    'DESC_ISR', 'DEDUCCION_ISR', 'RET_ISR',
+  ],
+  imss_employee: [
+    'imss', 'cuota_imss', 'seguro_social', 'IMSS',
+    'CUOTA_IMSS', 'DESC_IMSS', 'CUOTA_OBRERA', 'DEDUCCION_IMSS', 'RET_IMSS',
+  ],
+  infonavit: [
+    'infonavit', 'credito_infonavit', 'INFONAVIT',
+    'DESC_INFONAVIT', 'CREDITO_INFONAVIT', 'DEDUCCION_INFONAVIT', 'RET_INFONAVIT', 'INFO',
+  ],
+  other_deductions: [
+    'otras_deducciones', 'otros_descuentos', 'prestamos',
+    'OTRAS_DEDUCCIONES', 'OTROS_DESCUENTOS', 'DEDUCCIONES_OTRAS', 'PRESTAMOS', 'CAJA_AHORRO', 'DESCUENTOS', 'OTROS',
+  ],
+  net_pay: [
+    'neto', 'sueldo_neto', 'importe_neto', 'NETO', 'neto_pagar',
+    'SUELDO_NETO', 'IMPORTE_NETO', 'NETO_PAGAR', 'TOTAL_NETO', 'PAGO_NETO', 'LIQUIDO', 'IMPORTE_PAGO',
+  ],
+  total_deductions: [
+    'deducciones', 'total_deducciones', 'DEDUCCIONES',
+    'TOTAL_DEDUCCIONES', 'TOTAL_DESCUENTOS', 'DEDUCCION_TOTAL', 'DESC_TOTAL',
+  ],
+  gross_exempt: [
+    'percepciones_exentas', 'exento',
+    'PERCEPCIONES_EXENTAS', 'PERC_EXEN', 'EXENTO', 'TOTAL_EXENTO', 'IMPORTE_EXENTO',
+  ],
+  days_paid: [
+    'dias', 'dias_trabajados', 'DIAS',
+    'DIAS_PAGADOS', 'NUM_DIAS', 'PERIODO_DIAS', 'DIAS_PERIODO',
+  ],
+  payment_date: [
+    'fecha_pago', 'f_pago', 'FECHA_PAGO', 'fecha de pago',
+    'FEC_PAGO', 'FECHA_DEPOSITO', 'FEC_DEPOSITO',
+  ],
+  period: [
+    'periodo', 'quincena', 'PERIODO', 'period',
+    'SEMANA', 'CVE_PERIODO', 'NUM_PERIODO', 'PERIODO_PAGO', 'EJERCICIO_PERIODO',
+  ],
+  year: [
+    'anio', 'año', 'ANIO', 'year',
+    'EJERCICIO', 'CVE_ANIO',
+  ],
 }
 
 /** Campos que pertenecen a payroll_records (vs. employees) — usado por el
@@ -105,6 +207,7 @@ export const CANONICAL_FIELD_LABELS: Record<CanonicalField, string> = {
   nss:           'NSS (IMSS)',
   daily_salary:  'Salario diario',
   monthly_salary: 'Salario mensual',
+  salary_base_imss: 'SBC (Base Cotización IMSS)',
   department:    'Departamento',
   position:      'Puesto',
   plant:         'Planta',
@@ -182,13 +285,16 @@ export function mapHeaders(headers: unknown[], overrideMap?: Record<string, stri
 // métrica de texto detectaría, ej. "SUPERVISOR" -> notes, un campo que no
 // existe como columna dedicada) con similitud de edición como fallback
 // genérico para cualquier otro header parecido a un campo canónico.
+//
+// 'clave', 'no empleado', 'salario mensual', 'sueldo mensual', 'sal
+// mensual', 'banco', 'clabe' y 'cuenta clabe' se quitaron de aquí: ahora
+// son alias exactos (ver ALIASES arriba, headers reales de Nomipaq/
+// CONTPAQi) — dejarlos aquí los habría vuelto inalcanzables (mapHeaders
+// siempre revisa ALIASES antes que suggestField).
 
 const SUGGESTION_HINTS: Record<string, CanonicalField> = {
-  'clave': 'employee_code', 'no empleado': 'employee_code', 'numero empleado': 'employee_code',
-  'num empleado': 'employee_code', 'codigo': 'employee_code', 'codigo empleado': 'employee_code',
-  'salario mensual': 'monthly_salary', 'sueldo mensual': 'monthly_salary', 'sal mensual': 'monthly_salary',
-  'banco': 'bank_name',
-  'clabe': 'bank_clabe', 'cuenta clabe': 'bank_clabe', 'cuenta': 'bank_clabe',
+  'numero empleado': 'employee_code', 'codigo': 'employee_code', 'codigo empleado': 'employee_code',
+  'cuenta': 'bank_clabe',
   'supervisor': 'notes', 'jefe directo': 'notes', 'jefe': 'notes', 'observaciones': 'notes',
 }
 

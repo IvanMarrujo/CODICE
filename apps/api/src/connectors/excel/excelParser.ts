@@ -36,6 +36,7 @@ export interface ParsedEmployeeRow {
   nss?:            string
   daily_salary?:   number
   monthly_salary?: number
+  salary_base_imss?: number
   department?:     string
   position?:       string
   plant?:          string
@@ -187,6 +188,11 @@ function mapRowValues(values: Partial<Record<CanonicalField, unknown>>, rowNumbe
     const n = parseSalary(values.monthly_salary)
     if (n === null) throw new Error(`Salario mensual inválido: "${values.monthly_salary}"`)
     out.monthly_salary = n
+  }
+  if (values.salary_base_imss != null) {
+    const n = parseSalary(values.salary_base_imss)
+    if (n === null) throw new Error(`SBC inválido: "${values.salary_base_imss}"`)
+    out.salary_base_imss = n
   }
 
   if (values.department != null)    out.department    = String(values.department).trim()
