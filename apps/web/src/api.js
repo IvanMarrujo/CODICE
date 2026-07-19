@@ -525,7 +525,11 @@ export function mapEmployee(row) {
     planta: row.plant,
     turno: row.shift,
     ingreso: row.hire_date ? String(row.hire_date).slice(0, 10) : "",
-    antiguedad: row.hire_date ? yearsSince(row.hire_date) : 0,
+    // Sin hire_date (ej. importado de un Excel que solo trae "años de
+    // servicio", no fecha exacta) cae a la antigüedad declarada por el
+    // usuario — ver ANTIGUEDAD_ANIOS en fieldMapper.ts. Nunca las dos a la
+    // vez: hire_date, cuando existe, es la fuente más precisa.
+    antiguedad: row.hire_date ? yearsSince(row.hire_date) : Number(row.seniority_years ?? 0),
     salario: Number(row.monthly_salary ?? 0),
     email: row.email,
   };

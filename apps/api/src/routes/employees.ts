@@ -50,6 +50,9 @@ const employeeInputSchema = z.object({
   phone:         z.string().optional(),
   status:        z.string().optional(),
   notes:         z.string().optional(),
+  // Edición inline de "Campos adicionales" en Expediente → Perfil — merge,
+  // no overwrite (ver más abajo), así PATCHear un campo no borra los demás.
+  customFields:  z.record(z.string()).optional(),
 })
 
 const createSchema = employeeInputSchema.extend({
@@ -139,7 +142,7 @@ router.get('/', requireHR, async (req: Request, res: Response, next: NextFunctio
       tenantDb.$queryRaw<any[]>`
         SELECT id, employee_code, rfc, curp, first_name, last_name, full_name, department, position,
                plant, shift, contract_type, hire_date, daily_salary, monthly_salary, email, phone,
-               status, xp_points, xp_level, created_at
+               status, xp_points, xp_level, created_at, seniority_years
         FROM employees
         WHERE ${whereSql}
         ${orderSql}
@@ -392,16 +395,19 @@ router.post('/', requireHR, async (req: Request, res: Response, next: NextFuncti
 
 router.patch('/:id', requireHR, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const input = employeeInputSchema.parse(req.body)
+    const { customFields, ...rest } = employeeInputSchema.parse(req.body)
     const tenantId = req.tenant.id
     const tenantDb = req.tenantDb
 
-    const entries = Object.entries(input).filter(([, v]) => v !== undefined) as [string, unknown][]
-    if (entries.length === 0) throw new AppError(400, 'No se enviaron campos para actualizar')
+    const entries = Object.entries(rest).filter(([, v]) => v !== undefined) as [string, unknown][]
+    if (entries.length === 0 && !customFields) throw new AppError(400, 'No se enviaron campos para actualizar')
 
     const before = await findEmployeeOr404(tenantDb, tenantId, req.params.id)
 
     const setFragments = entries.map(([k, v]) => Prisma.sql`${Prisma.raw(COLUMN_MAP[k])} = ${v}`)
+    if (customFields) {
+      setFragments.push(Prisma.sql`custom_fields = COALESCE(custom_fields, '{}'::jsonb) || ${JSON.stringify(customFields)}::jsonb`)
+    }
 
     const rows = await tenantDb.$queryRaw<any[]>`
       UPDATE employees SET ${Prisma.join(setFragments, ', ')}

@@ -14,6 +14,7 @@ export interface EmployeeUpsertRow {
   daily_salary?:  number
   monthly_salary?: number
   salary_base_imss?: number
+  seniority_years?: number
   department?:    string
   position?:      string
   plant?:         string
@@ -25,6 +26,11 @@ export interface EmployeeUpsertRow {
   bank_name?:     string
   bank_clabe?:    string
   notes?:         string
+  // Se aplica con merge (no overwrite) sobre employees.custom_fields — ver
+  // upsertEmployee en routes/connectors.ts. No es parte de
+  // WRITABLE_EMPLOYEE_COLUMNS a propósito: ese mecanismo pisa la columna
+  // entera, y un custom_fields de un import no debe borrar los de otro.
+  custom_fields?: Record<string, string>
 }
 
 export interface PayrollUpsertRow {

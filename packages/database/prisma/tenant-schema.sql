@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.employees (
   hire_date         DATE,
   termination_date  DATE,
   trial_end_date    DATE,                    -- fin de periodo de prueba
+  seniority_years   NUMERIC(4,1),            -- antigüedad declarada (fallback cuando hire_date es null)
 
   -- Salario
   daily_salary      NUMERIC(10,2),
@@ -64,6 +65,7 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.employees (
   avatar_url        TEXT,
   notes             TEXT,
   raw_source_data   JSONB,                  -- datos originales del conector, para debug
+  custom_fields     JSONB       DEFAULT '{}', -- columnas del Excel mapeadas como "campo personalizado" (ver fieldMapper.ts)
 
   created_at        TIMESTAMPTZ DEFAULT NOW(),
   updated_at        TIMESTAMPTZ DEFAULT NOW(),

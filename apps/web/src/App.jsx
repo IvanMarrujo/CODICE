@@ -1199,10 +1199,7 @@ function GamificationSummaryCard({ token, employeeId }) {
   );
 }
 
-function SbcCard({ token, employeeId }) {
-  const detail = useEmployeeDetail(token, employeeId);
-  if (detail.status === "loading") return null;
-  const emp = detail.data;
+function SbcCard({ emp }) {
   const sbc = emp?.salary_base_imss != null ? Number(emp.salary_base_imss) : null;
   if (sbc == null) return null;
   const dailySalary = emp?.daily_salary != null ? Number(emp.daily_salary) : null;
@@ -1222,20 +1219,69 @@ function SbcCard({ token, employeeId }) {
   );
 }
 
+// "centro_de_costo" -> "Centro de costo" — sin diccionario fijo: la llave
+// sale de lo que el usuario tecleó como nombre del campo personalizado
+// (ver customFieldKey en fieldMapper.ts), no de un enum conocido.
+function prettyFieldKey(key) {
+  const words = key.replace(/_/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function CustomFieldRow({ token, employeeId, fieldKey, label, value }) {
+  const [v, setV] = useState(value ?? "");
+  useEffect(() => { setV(value ?? ""); }, [value]);
+  const save = async () => {
+    if (v === (value ?? "")) return;
+    try {
+      await updateEmployee(token, employeeId, { customFields: { [fieldKey]: v } });
+      toast("Campo actualizado");
+    } catch (err) { toast(err.message, "no"); }
+  };
+  return (
+    <div>
+      <div className="muted2" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 3 }}>{label}</div>
+      <input className="input" style={{ fontSize: 13 }} value={v} onChange={(ev) => setV(ev.target.value)} onBlur={save} />
+    </div>
+  );
+}
+
+function CustomFieldsCard({ token, employeeId, emp }) {
+  const entries = Object.entries(emp?.custom_fields || {});
+  if (entries.length === 0) return null;
+  return (
+    <div className="glass-2" style={{ padding: 14, marginBottom: 18 }}>
+      <Eyebrow>Campos adicionales</Eyebrow>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 9 }}>
+        {entries.map(([key, value]) => (
+          <CustomFieldRow key={key} token={token} employeeId={employeeId} fieldKey={key} label={prettyFieldKey(key)} value={value} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ResumenTab({ e, setStatus, update, token }) {
   const dv = diasVacaciones(e.antiguedad); const sd = e.salario / 30;
+  const detail = useEmployeeDetail(token, e.dbId);
+  const emp = detail.data;
   return (
     <>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
         <Mini label="Planta" v={e.planta} /><Mini label="Turno" v={e.turno} /><Mini label="Ingreso" v={e.ingreso} /><Mini label="Antigüedad" v={`${e.antiguedad} años`} /><Mini label="Salario mensual" v={mxn(e.salario)} /><Mini label="Contrato" v={e.contrato} />
       </div>
+      {!e.ingreso && emp?.seniority_years != null && (
+        <div className="muted2" style={{ fontSize: 11.5, marginTop: -10, marginBottom: 18 }}>
+          Antigüedad declarada: {Number(emp.seniority_years)} años
+        </div>
+      )}
       <Eyebrow>Modificar estatus</Eyebrow>
       <div style={{ display: "flex", gap: 7, flexWrap: "wrap", margin: "9px 0 18px" }}>
         {Object.keys(STATUS).map((s) => <button key={s} className={`btn btn-sm ${e.status === s ? "btn-accent" : ""}`} onClick={() => setStatus(e.dbId, s)}><span className="dot" style={{ background: STATUS[s] }} />{s}</button>)}
       </div>
       <Eyebrow>Tipo de contrato</Eyebrow>
       <select className="select" style={{ margin: "9px 0 18px" }} value={e.contrato} onChange={(ev) => update({ contrato: ev.target.value })}>{CONTRATOS.map((c) => <option key={c}>{c}</option>)}</select>
-      <SbcCard token={token} employeeId={e.dbId} />
+      <SbcCard emp={emp} />
+      <CustomFieldsCard token={token} employeeId={e.dbId} emp={emp} />
       <GamificationSummaryCard token={token} employeeId={e.dbId} />
       <div className="glass-2" style={{ padding: 14 }}>
         <Eyebrow>Derechos LFT estimados</Eyebrow>
@@ -1802,6 +1848,10 @@ const CODICE_PAYROLL_FIELDS = [
 ];
 const PAYROLL_FIELD_KEYS = new Set(CODICE_PAYROLL_FIELDS.map(([f]) => f));
 
+// Sentinel para "guardar como campo personalizado" — mismo prefijo que
+// CUSTOM_FIELD_PREFIX en apps/api/src/connectors/excel/fieldMapper.ts.
+const CUSTOM_FIELD_PREFIX = "__custom__:";
+
 const MODO_A_STEPS = ["Sistema", "Archivo", "Mapeo", "Vista previa", "Progreso", "Resultado"];
 
 function MiniDropzone({ accept, multiple, onFiles, busy, label, busyLabel }) {
@@ -1831,6 +1881,7 @@ function MiniDropzone({ accept, multiple, onFiles, busy, label, busyLabel }) {
 
 function FieldMapperTable({ headers, manualMap, setManualMap }) {
   const applySuggestion = (h) => setManualMap((m) => ({ ...m, [h.index]: h.suggestion.field }));
+  const setCustomLabel = (h, label) => setManualMap((m) => ({ ...m, [h.index]: `${CUSTOM_FIELD_PREFIX}${label}` }));
   return (
     <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
       <table className="tbl">
@@ -1839,6 +1890,8 @@ function FieldMapperTable({ headers, manualMap, setManualMap }) {
           {headers.map((h) => {
             const matched = !!h.field;
             const overridden = manualMap[h.index];
+            const isCustom = typeof overridden === "string" && overridden.startsWith(CUSTOM_FIELD_PREFIX);
+            const customLabel = isCustom ? overridden.slice(CUSTOM_FIELD_PREFIX.length) : "";
             const suggestion = !matched && !overridden ? h.suggestion : null;
             return (
               <tr key={h.index} style={{ cursor: "default" }}>
@@ -1848,12 +1901,24 @@ function FieldMapperTable({ headers, manualMap, setManualMap }) {
                     <div>
                       <select
                         className="select" style={{ fontSize: 12, padding: "5px 8px", width: 200 }}
-                        value={overridden || ""} onChange={(e) => setManualMap((m) => ({ ...m, [h.index]: e.target.value }))}
+                        value={isCustom ? "__custom__" : (overridden || "")}
+                        onChange={(e) => {
+                          if (e.target.value === "__custom__") { setCustomLabel(h, h.label); return; }
+                          setManualMap((m) => ({ ...m, [h.index]: e.target.value }));
+                        }}
                       >
                         <option value="">Sin mapear (se ignora)</option>
                         <optgroup label="Empleados">{CODICE_FIELDS.map(([f, l]) => <option key={f} value={f}>{l}</option>)}</optgroup>
                         <optgroup label="Nómina">{CODICE_PAYROLL_FIELDS.map(([f, l]) => <option key={f} value={f}>{l}</option>)}</optgroup>
+                        <option value="__custom__">+ Guardar como campo personalizado</option>
                       </select>
+                      {isCustom && (
+                        <input
+                          className="input" style={{ fontSize: 11.5, padding: "4px 8px", width: 190, marginTop: 6 }}
+                          placeholder="Nombre del campo" value={customLabel} autoFocus
+                          onChange={(e) => setCustomLabel(h, e.target.value)}
+                        />
+                      )}
                       {suggestion && (
                         <div className="row" style={{ gap: 7, marginTop: 6 }}>
                           <span className="muted2" style={{ fontSize: 11 }}>Sugerido: {suggestion.label}</span>
@@ -1866,9 +1931,11 @@ function FieldMapperTable({ headers, manualMap, setManualMap }) {
                 <td>
                   {matched
                     ? <span className="chip" style={{ color: "var(--emerald)" }}><CircleCheck size={11} />Detectado</span>
-                    : overridden
-                      ? <span className="chip" style={{ color: "var(--emerald)" }}><CircleCheck size={11} />Mapeado manualmente</span>
-                      : <span className="chip" style={{ color: "var(--amber)" }}><AlertTriangle size={11} />{suggestion ? "Sugerencia disponible" : "Sin mapear"}</span>}
+                    : isCustom
+                      ? <span className="chip" style={{ color: "var(--cyan)" }}><Tag size={11} />Campo personalizado · {customLabel || "…"}</span>
+                      : overridden
+                        ? <span className="chip" style={{ color: "var(--emerald)" }}><CircleCheck size={11} />Mapeado manualmente</span>
+                        : <span className="chip" style={{ color: "var(--amber)" }}><AlertTriangle size={11} />{suggestion ? "Sugerencia disponible" : "Sin mapear"}</span>}
                 </td>
               </tr>
             );

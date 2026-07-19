@@ -5,7 +5,10 @@
 // ============================================================
 
 import * as XLSX from 'xlsx'
-import { mapHeaders, suggestField, CanonicalField, PAYROLL_FIELDS, FieldSuggestion } from './fieldMapper'
+import {
+  mapHeaders, suggestField, CanonicalField, PAYROLL_FIELDS, FieldSuggestion,
+  isCustomFieldOverride, customFieldLabel, customFieldKey,
+} from './fieldMapper'
 
 // Campos de payroll_records que una fila de Excel puede traer además de los
 // datos del empleado — ver mapRowValues(). `period` no es una columna real
@@ -37,6 +40,7 @@ export interface ParsedEmployeeRow {
   daily_salary?:   number
   monthly_salary?: number
   salary_base_imss?: number
+  seniority_years?: number
   department?:     string
   position?:       string
   plant?:          string
@@ -49,6 +53,7 @@ export interface ParsedEmployeeRow {
   bank_clabe?:     string
   notes?:          string
   payroll?:        ParsedPayrollFields  // presente solo si la fila trae columnas de nómina
+  custom_fields?:  Record<string, string> // columnas mapeadas a "campo personalizado" (ver fieldMapper.ts)
 }
 
 export interface RowError {
@@ -97,16 +102,24 @@ export function parseExcelBuffer(buffer: Buffer, filename: string, overrideMap?:
     if (!cells || cells.every(c => c === '' || c == null)) continue // fila vacía
 
     const values: Partial<Record<CanonicalField, unknown>> = {}
+    let customFields: Record<string, string> | undefined
     for (const [colIndex, field] of columnMap.entries()) {
       const cell = cells[colIndex]
-      if (cell !== undefined && cell !== null && String(cell).trim() !== '') {
-        values[field] = cell
+      if (cell === undefined || cell === null || String(cell).trim() === '') continue
+
+      if (isCustomFieldOverride(field)) {
+        customFields ??= {}
+        customFields[customFieldKey(customFieldLabel(field))] = String(cell).trim()
+        continue
       }
+      values[field] = cell
     }
-    if (Object.keys(values).length === 0) continue
+    if (Object.keys(values).length === 0 && !customFields) continue
 
     try {
-      rows.push(mapRowValues(values, rowNumber))
+      const row = mapRowValues(values, rowNumber)
+      if (customFields) row.custom_fields = customFields
+      rows.push(row)
     } catch (err: any) {
       errors.push({ row: rowNumber, message: err.message })
     }
@@ -193,6 +206,11 @@ function mapRowValues(values: Partial<Record<CanonicalField, unknown>>, rowNumbe
     const n = parseSalary(values.salary_base_imss)
     if (n === null) throw new Error(`SBC inválido: "${values.salary_base_imss}"`)
     out.salary_base_imss = n
+  }
+  if (values.seniority_years != null) {
+    const n = parseSalary(values.seniority_years)
+    if (n === null) throw new Error(`Antigüedad declarada inválida: "${values.seniority_years}"`)
+    out.seniority_years = n
   }
 
   if (values.department != null)    out.department    = String(values.department).trim()

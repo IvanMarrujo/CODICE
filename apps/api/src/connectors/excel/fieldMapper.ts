@@ -12,6 +12,7 @@ export type CanonicalField =
   | 'daily_salary'
   | 'monthly_salary'
   | 'salary_base_imss'
+  | 'seniority_years'
   | 'department'
   | 'position'
   | 'plant'
@@ -70,10 +71,16 @@ const ALIASES: Record<CanonicalField, string[]> = {
     'BASE_IMSS', 'SALARIO_BASE_IMSS', 'SBC', 'SDI',
     'SAL_BASE_COT', 'SALARIO_BASE_COTIZACION', 'SALARIO_DIARIO_INTEGRADO',
     'SAL_INT', 'SUELDO_INTEGRADO', 'BASE_COTIZACION',
+    'SAL_DIARIO_INTEGRADO', 'S_D_I',
+  ],
+  seniority_years: [
+    'antiguedad_anios', 'ANTIGUEDAD_ANIOS', 'antiguedad', 'anios_servicio',
+    'años_servicio', 'years_of_service', 'antiguedad_anos', 'seniority',
   ],
   department: [
     'departamento', 'depto', 'area', 'área',
     'CVE_DEPTO', 'CENTRO_COSTO', 'DEPART', 'NOM_DEPTO',
+    'CVE_CENTRO_COSTO', 'CENTRO_DE_COSTO', 'COST_CENTER', 'CC',
   ],
   position: [
     'puesto', 'cargo', 'posicion', 'posición',
@@ -86,11 +93,13 @@ const ALIASES: Record<CanonicalField, string[]> = {
   shift: [
     'turno', 'shift',
     'CVE_TURNO', 'JORNADA', 'HORARIO',
+    'TIPO_JORNADA', 'JORNADA_LABORAL', 'HORAS_JORNADA',
   ],
   hire_date: [
     'fecha ingreso', 'f ingreso', 'ingreso', 'hire date',
     'FECHA_INGRESO', 'FEC_INGRESO', 'FINGRESO', 'FECHA_ALTA', 'FEC_ALTA',
     'FECHA_CONTRATACION', 'FCONTRAT', 'F_INGRESO',
+    'F_ALTA', 'FECHA_DE_ALTA', 'ALTA_IMSS', 'FECHA_INGRESO_IMSS',
   ],
   contract_type: [
     'contrato', 'tipo contrato',
@@ -208,6 +217,7 @@ export const CANONICAL_FIELD_LABELS: Record<CanonicalField, string> = {
   daily_salary:  'Salario diario',
   monthly_salary: 'Salario mensual',
   salary_base_imss: 'SBC (Base Cotización IMSS)',
+  seniority_years: 'Antigüedad declarada (años)',
   department:    'Departamento',
   position:      'Puesto',
   plant:         'Planta',
@@ -277,6 +287,30 @@ export function mapHeaders(headers: unknown[], overrideMap?: Record<string, stri
   })
 
   return columnMap
+}
+
+// ── Campos personalizados ────────────────────────────────────
+// Un header que no matchea ningún campo canónico (ni por alias ni por
+// sugerencia) puede guardarse igual, con el nombre que el usuario le dé, en
+// employees.custom_fields (JSONB) — ver wizard Step 3 en App.jsx. El
+// "campo" que viaja en overrideMap/columnMap para estos casos no es un
+// CanonicalField real: es este sentinel con el label pegado, para no tener
+// que cambiar la forma de mapHeaders() (ya acepta cualquier string en
+// overrideMap y no colisiona entre sí porque cada label es distinto).
+
+export const CUSTOM_FIELD_PREFIX = '__custom__:'
+
+export function isCustomFieldOverride(value: string): boolean {
+  return value.startsWith(CUSTOM_FIELD_PREFIX)
+}
+
+export function customFieldLabel(value: string): string {
+  return value.slice(CUSTOM_FIELD_PREFIX.length)
+}
+
+/** Nombre de columna -> llave JSONB: minúsculas + guiones bajos. */
+export function customFieldKey(label: string): string {
+  return normalize(label).replace(/\s+/g, '_')
 }
 
 // ── Sugerencias por similitud (Tier 2) ──────────────────────────

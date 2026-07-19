@@ -21,7 +21,7 @@ import { requireHR }                                 from '../middleware/auth'
 import { AppError }                                  from '../lib/errors'
 import { redis }                                     from '../lib/redis'
 import { parseExcelBuffer, previewExcelBuffer, ParsedEmployeeRow } from '../connectors/excel/excelParser'
-import { CANONICAL_FIELD_LABELS }                     from '../connectors/excel/fieldMapper'
+import { CANONICAL_FIELD_LABELS, isCustomFieldOverride, customFieldLabel } from '../connectors/excel/fieldMapper'
 import { parseCfdiBuffer }                           from '../connectors/cfdi/cfdiParser'
 import { parseEmpleaDbf, parseNominaDbf }             from '../connectors/dbf/dbfParser'
 import { EmployeeUpsertRow, PayrollUpsertRow }        from '../connectors/common'
@@ -190,7 +190,11 @@ router.post('/preview/excel', requireHR, handlePreviewExcelUpload, async (req: R
     const result = previewExcelBuffer(file.buffer, file.originalname, 5, overrideMap)
     const headers = result.headers.map((h) => ({
       ...h,
-      fieldLabel: h.field ? CANONICAL_FIELD_LABELS[h.field] : null,
+      fieldLabel: !h.field
+        ? null
+        : isCustomFieldOverride(h.field)
+          ? `Campo personalizado · ${customFieldLabel(h.field)}`
+          : CANONICAL_FIELD_LABELS[h.field],
     }))
 
     // El banner de "mapeo guardado" solo tiene sentido si de verdad aplicó a
@@ -248,9 +252,12 @@ router.post('/preview/cfdi', requireHR, handlePreviewCfdiUpload, async (req: Req
 
 export const WRITABLE_EMPLOYEE_COLUMNS: (keyof EmployeeUpsertRow)[] = [
   'first_name', 'last_name', 'rfc', 'curp', 'nss', 'daily_salary', 'monthly_salary', 'salary_base_imss',
+  'seniority_years',
   'department', 'position', 'plant', 'shift', 'hire_date',
   'contract_type', 'status', 'employee_code', 'bank_name', 'bank_clabe', 'notes',
 ]
+// `custom_fields` NO va en esta whitelist — se aplica aparte con merge JSONB
+// (no overwrite), ver upsertEmployee más abajo.
 
 // ── Mapeo de columnas guardado por tenant + tipo de fuente ──────
 // El tipo de fuente real que produce este flujo hoy es 'EXCEL_GENERIC'
@@ -1111,10 +1118,16 @@ export async function upsertEmployee(
   const presentFields = WRITABLE_EMPLOYEE_COLUMNS
     .map(col => [col, row[col]] as const)
     .filter(([, value]) => value !== undefined)
+  const hasCustomFields = row.custom_fields != null && Object.keys(row.custom_fields).length > 0
 
   if (existingId) {
     const setFragments = presentFields.map(([col, value]) => Prisma.sql`${Prisma.raw(col)} = ${value}`)
     setFragments.push(Prisma.sql`${Prisma.raw('source')} = ${source}`)
+    // Merge, no overwrite — un import que solo trae "Centro de costo" no debe
+    // borrar otros campos personalizados ya guardados por un import anterior.
+    if (hasCustomFields) {
+      setFragments.push(Prisma.sql`custom_fields = COALESCE(custom_fields, '{}'::jsonb) || ${JSON.stringify(row.custom_fields)}::jsonb`)
+    }
 
     await tenantDb.$executeRaw`
       UPDATE employees SET ${Prisma.join(setFragments, ', ')} WHERE id = ${existingId}
@@ -1128,6 +1141,10 @@ export async function upsertEmployee(
 
   const columns = [...presentFields.map(([col]) => col), 'tenant_id', 'source']
   const values: unknown[]  = [...presentFields.map(([, value]) => value), tenantId, source]
+  if (hasCustomFields) {
+    columns.push('custom_fields')
+    values.push(Prisma.sql`${JSON.stringify(row.custom_fields)}::jsonb`)
+  }
 
   const columnFragment = Prisma.join(columns.map(c => Prisma.raw(c)), ', ')
   const valueFragment  = Prisma.join(values, ', ')
