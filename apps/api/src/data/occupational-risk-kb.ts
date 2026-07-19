@@ -88,12 +88,19 @@ export const OCCUPATIONAL_RISK_KB: {
   },
 }
 
-const EXAM_MONTHS: Record<DepartmentRiskKB['examenRequerido'], number> = {
-  trimestral: 3, cuatrimestral: 4, semestral: 6, anual: 12,
-}
-
+// perfil_optimo.examenRequerido viene de department_risk_profiles (JSONB editable
+// a mano en la DB) — admite más frecuencias que la unión estricta de la KB
+// estática (DepartmentRiskKB['examenRequerido']), de ahí el string suelto acá.
 export function examFrequencyMonths(freq: string | null | undefined): number {
-  return EXAM_MONTHS[freq as DepartmentRiskKB['examenRequerido']] ?? 12
+  switch (freq?.toLowerCase()) {
+    case 'mensual':       return 1
+    case 'bimestral':     return 2
+    case 'trimestral':    return 3
+    case 'cuatrimestral': return 4
+    case 'semestral':     return 6
+    case 'anual':         return 12
+    default:              return 12
+  }
 }
 
 // Deptos del tenant único (ORG.deptos en el shell admin) que no tienen
