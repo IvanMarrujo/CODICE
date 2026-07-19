@@ -5,6 +5,7 @@
 
 import { Router, Request, Response, NextFunction } from 'express'
 import { z } from 'zod'
+import bcrypt from 'bcryptjs'
 import { requireHR } from '../middleware/auth'
 import { prismaPublic } from '../lib/prisma'
 import { AppError } from '../lib/errors'
@@ -50,6 +51,75 @@ router.patch('/profile', requireHR, async (req: Request, res: Response, next: Ne
       select: { id: true, email: true, firstName: true, lastName: true, phone: true, role: true },
     })
     res.json(admin)
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── GET /api/admin/supervisors ──────────────────────────────────
+// Usuarios AREA_MANAGER de este tenant (Supervisor Shell) + tamaño de
+// equipo — supervisor_name/department viven en el schema del tenant,
+// AdminUser en el público, así que el conteo se resuelve aparte por
+// cada supervisor (no hay JOIN posible entre ambos schemas).
+
+router.get('/supervisors', requireHR, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tenantId = req.tenant.id
+    const supervisors = await prismaPublic.adminUser.findMany({
+      where:  { tenantId, role: 'AREA_MANAGER' },
+      select: { id: true, firstName: true, lastName: true, email: true, assignedDepartment: true, isActive: true, lastLoginAt: true },
+      orderBy: { firstName: 'asc' },
+    })
+
+    const data = await Promise.all(supervisors.map(async (s) => {
+      const fullName = `${s.firstName} ${s.lastName}`
+      const rows = await req.tenantDb.$queryRaw<{ count: number }[]>`
+        SELECT COUNT(*)::int AS count FROM employees
+        WHERE tenant_id = ${tenantId}
+          AND (
+            supervisor_name = ${fullName}
+            OR (${s.assignedDepartment}::text IS NOT NULL AND department = ${s.assignedDepartment})
+          )
+      `
+      return { ...s, teamSize: rows[0]?.count ?? 0 }
+    }))
+
+    res.json({ data })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── POST /api/admin/supervisors ─────────────────────────────────
+
+const createSupervisorSchema = z.object({
+  firstName:          z.string().min(1),
+  lastName:           z.string().min(1),
+  email:              z.string().email(),
+  password:           z.string().min(8),
+  assignedDepartment: z.string().optional(),
+})
+
+router.post('/supervisors', requireHR, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const input = createSupervisorSchema.parse(req.body)
+    const tenantId = req.tenant.id
+    const normalizedEmail = input.email.trim().toLowerCase()
+
+    const existing = await prismaPublic.adminUser.findFirst({ where: { tenantId, email: normalizedEmail } })
+    if (existing) throw new AppError(409, 'Ya existe un usuario con ese correo')
+
+    const passwordHash = await bcrypt.hash(input.password, 12)
+    const user = await prismaPublic.adminUser.create({
+      data: {
+        tenantId, email: normalizedEmail, passwordHash,
+        firstName: input.firstName, lastName: input.lastName,
+        role: 'AREA_MANAGER', assignedDepartment: input.assignedDepartment ?? null,
+      },
+      select: { id: true, firstName: true, lastName: true, email: true, assignedDepartment: true, isActive: true },
+    })
+
+    res.status(201).json({ ...user, teamSize: 0 })
   } catch (err) {
     next(err)
   }

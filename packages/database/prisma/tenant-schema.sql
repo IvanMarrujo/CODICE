@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.employees (
   position          TEXT,
   plant             TEXT,                    -- planta / sucursal
   shift             TEXT,                    -- turno: Matutino, Vespertino, Nocturno
+  supervisor_name   TEXT,                    -- nombre del jefe directo (Supervisor Shell — ver AdminUser.assignedDepartment)
 
   -- Contrato
   contract_type     TEXT        DEFAULT 'Indeterminado',
@@ -322,6 +323,32 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.actas (
 
 CREATE INDEX idx_actas_emp    ON {SCHEMA}.actas (employee_id);
 CREATE INDEX idx_actas_status ON {SCHEMA}.actas (status);
+
+-- ─── SUPERVISOR INCIDENTS ─────────────────────────────────────
+-- Registro rápido de incidencias de piso (Supervisor Shell) — mucho más
+-- ligero que `actas` (sin firma/folio/status de workflow): un supervisor
+-- lo llena en segundos desde el celular. Severidad "grave" dispara WhatsApp
+-- a RH (ver routes/supervisor.ts). No sustituye el acta administrativa
+-- formal si el caso escala — eso sigue viviendo en `actas`.
+
+CREATE TABLE IF NOT EXISTS {SCHEMA}.supervisor_incidents (
+  id              TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  tenant_id       TEXT        NOT NULL,
+  employee_id     TEXT        REFERENCES {SCHEMA}.employees(id) ON DELETE CASCADE,
+  reported_by     TEXT        NOT NULL,        -- admin_user id (el supervisor)
+
+  type            TEXT        NOT NULL,
+  -- Retardo | Falta injustificada | Accidente leve | Accidente moderado/grave |
+  -- Conducta inapropiada | Daño a equipo
+  description     TEXT,
+  severity        TEXT        NOT NULL,        -- leve | moderado | grave
+
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_supervisor_incidents_emp    ON {SCHEMA}.supervisor_incidents (employee_id);
+CREATE INDEX idx_supervisor_incidents_reporter ON {SCHEMA}.supervisor_incidents (reported_by);
+CREATE INDEX idx_supervisor_incidents_date   ON {SCHEMA}.supervisor_incidents (created_at DESC);
 
 -- ─── COURSES (LMS) ────────────────────────────────────────────
 
