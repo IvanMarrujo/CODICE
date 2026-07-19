@@ -5,11 +5,11 @@ import {
 } from "recharts";
 import {
   LayoutDashboard, Users, FileSignature, Scale, Filter, MessageSquareText,
-  Bot, Search, Download, Plus, X, GripVertical, RotateCcw, Boxes,
+  Bot, Search, Download, Plus, X, GripVertical, RotateCcw,
   ChevronRight, AlertTriangle, CircleCheck, Clock, Send, Sparkles,
-  ShieldCheck, CalendarDays, FileText, RefreshCw, Check, Inbox, Factory,
+  CalendarDays, FileText, RefreshCw, Check, Inbox, Factory,
   GraduationCap, Monitor, Activity, Award, Maximize, ChevronLeft, Megaphone,
-  TrendingUp, ClipboardCheck, UserCheck, Zap, Plug, MapPin, QrCode, DollarSign, Upload,
+  ClipboardCheck, UserCheck, Zap, Plug, QrCode, DollarSign, Upload,
   Pause, Play, Trash2, Unplug, Pencil, CheckSquare, Square, Lock, FileHeart, MessageSquare, Copy,
   Radar as RadarIcon, ChevronDown, ExternalLink, Tag,
 } from "lucide-react";
@@ -32,7 +32,7 @@ import {
   fetchRiskSummary, fetchRiskNarrative,
   fetchContractsExpiringSoon, consultAIStream,
   fetchDeptRiskProfiles, updateDeptRiskProfile, logDeptAccidente,
-  fetchRadarLatest, refreshRadar, fetchRadarHistory,
+  fetchRadarLatest, refreshRadar,
   fetchEmployeeGamification, fetchGamificationLeaderboard,
   fetchZktecoDevices, registerZktecoDevice, deleteZktecoDevice,
 } from "./api.js";
@@ -381,7 +381,7 @@ function useSyncLog(token, refreshKey) {
   return { ...state, reload };
 }
 
-function SyncStatusCard({ token, compact = false, refreshKey, onSyncNow }) {
+function SyncStatusCard({ token, compact = false, refreshKey }) {
   const sync = useSyncLog(token, refreshKey);
 
   if (sync.status === "loading") {
@@ -427,7 +427,6 @@ function SyncStatusCard({ token, compact = false, refreshKey, onSyncNow }) {
         <div className="mono" style={{ fontSize: 12.5, color: "var(--text)" }}>
           {s.employeeCount ?? s.processed} empleados · {s.payrollRecordCount ?? s.processed} recibos · <span style={{ color: s.errors > 0 ? "var(--amber)" : "var(--emerald)" }}>{s.errors} errores</span>
         </div>
-        {onSyncNow && <button className="btn btn-accent btn-sm" onClick={onSyncNow}><RefreshCw size={12} />Sincronizar ahora</button>}
       </div>
     </div>
   );
