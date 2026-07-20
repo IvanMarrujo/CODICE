@@ -513,6 +513,28 @@ export async function downloadNdaPreview(token) {
   return { blob, filename: match ? match[1] : "nda-codice.pdf" };
 }
 
+// ── Actas administrativas · testigo digital ───────────────────
+
+export function fetchActas(token, employeeId) {
+  return authedFetch(token, `/api/actas?employeeId=${employeeId}`);
+}
+
+export function fetchActa(token, id) {
+  return authedFetch(token, `/api/actas/${id}`);
+}
+
+export function createActa(token, payload) {
+  return authedFetchJSON(token, `/api/actas`, "POST", payload);
+}
+
+export function fetchActaPdf(token, id) {
+  return authedFetchJSON(token, `/api/actas/${id}/pdf-legal`, "GET");
+}
+
+export function notifyActaSigner(token, id, role) {
+  return authedFetchJSON(token, `/api/actas/${id}/notify/${role}`, "POST", {});
+}
+
 export function mapEmployee(row) {
   return {
     id: row.employee_code || row.id,

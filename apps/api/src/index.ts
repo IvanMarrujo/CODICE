@@ -26,7 +26,7 @@ import contractRoutes   from './routes/contracts'
 import payrollRoutes    from './routes/payroll'
 import requestRoutes    from './routes/requests'
 import courseRoutes     from './routes/courses'
-import actaRoutes       from './routes/actas'
+import actaRoutes, { actaPublicRoutes } from './routes/actas'
 import connectorRoutes, { runReloadForSource } from './routes/connectors'
 import aiRoutes         from './routes/ai'
 import signageRoutes    from './routes/signage'
@@ -106,6 +106,10 @@ app.use('/api/webhook', whatsappWebhookRoutes)
 // Checadora ZKTeco (ADMS push) — el dispositivo no manda JWT, resuelve el
 // tenant por número de serie (ver routes/zktecoWebhook.ts).
 app.use('/api/webhook', zktecoWebhookRoutes)
+// Testigo digital de actas — el firmante nunca hizo login, el tenant sale
+// del propio token de firma (ver actas.ts:tenantCtxFromId). Montado ANTES
+// del pipeline autenticado; lo que no matchea acá cae al actaRoutes de abajo.
+app.use('/api/actas', actaPublicRoutes)
 
 // ── Authenticated routes ─────────────────────────────────────
 // Orden: rateLimiter → JWT auth → tenant resolver → route handler
