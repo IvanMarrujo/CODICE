@@ -162,4 +162,53 @@ router.post('/:courseId/constancia/:employeeId', requireHR, async (req: Request,
   }
 })
 
+// ── POST /api/courses/:courseId/assign-bulk ──────────────────
+// Asigna un curso a varios empleados a la vez (acción masiva desde
+// Plantilla) — crea el `course_progress` en 0% si no existía; si el
+// empleado ya lo tenía asignado o en curso, lo deja tal cual
+// (ON CONFLICT DO NOTHING — no pisa progreso/calificación existente).
+
+const assignBulkSchema = z.object({
+  employeeIds: z.array(z.string().min(1)).min(1).max(500),
+})
+
+router.post('/:courseId/assign-bulk', requireHR, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { employeeIds } = assignBulkSchema.parse(req.body)
+    const { courseId } = req.params
+    const tenantId = req.tenant.id
+    const tenantDb = req.tenantDb
+
+    const courseRows = await tenantDb.$queryRaw<any[]>`
+      SELECT id FROM courses WHERE id = ${courseId} AND tenant_id = ${tenantId} LIMIT 1
+    `
+    if (!courseRows[0]) throw new AppError(404, 'Curso no encontrado')
+
+    // Solo empleados reales de este tenant — un id ajeno/inventado en el
+    // body simplemente no matchea nada, no lanza error (evita que un solo
+    // id inválido tumbe la asignación masiva del resto).
+    const validRows = await tenantDb.$queryRaw<{ id: string }[]>`
+      SELECT id FROM employees WHERE tenant_id = ${tenantId} AND id = ANY(${employeeIds})
+    `
+    const validIds = validRows.map((r: any) => r.id)
+    if (validIds.length === 0) throw new AppError(400, 'Ningún empleado válido en la selección')
+
+    const inserted = await tenantDb.$queryRaw<{ employee_id: string }[]>`
+      INSERT INTO course_progress (tenant_id, employee_id, course_id, progress_pct, attempts, passed, started_at)
+      SELECT ${tenantId}, emp_id, ${courseId}, 0, 0, false, NOW()
+      FROM unnest(${validIds}::text[]) AS emp_id
+      ON CONFLICT (employee_id, course_id) DO NOTHING
+      RETURNING employee_id
+    `
+
+    res.json({
+      assigned:        inserted.length,
+      alreadyAssigned: validIds.length - inserted.length,
+      skipped:         employeeIds.length - validIds.length,
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
 export default router

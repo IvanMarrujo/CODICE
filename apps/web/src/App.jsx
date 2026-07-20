@@ -11,7 +11,7 @@ import {
   GraduationCap, Monitor, Activity, Award, Maximize, ChevronLeft, Megaphone,
   ClipboardCheck, UserCheck, Zap, Plug, QrCode, DollarSign, Upload,
   Pause, Play, Trash2, Unplug, Pencil, CheckSquare, Square, Lock, FileHeart, MessageSquare, Copy,
-  Radar as RadarIcon, ChevronDown, ExternalLink, Tag,
+  Radar as RadarIcon, ChevronDown, ExternalLink, Tag, LayoutGrid, List as ListIcon,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { io } from "socket.io-client";
@@ -36,6 +36,7 @@ import {
   fetchEmployeeGamification, fetchGamificationLeaderboard,
   fetchEmployee,
   fetchZktecoDevices, registerZktecoDevice, deleteZktecoDevice,
+  exportEmployeesCsv, fetchCourses, assignCourseBulk,
 } from "./api.js";
 
 // Credenciales de auto-login del cockpit admin (tenant único GFP). Vienen de
@@ -201,6 +202,21 @@ label.fld{display:block;font-size:11px;color:var(--muted);margin-bottom:5px;font
 .typing-inline span{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--muted);animation:blink 1.2s infinite}
 .typing-inline span:nth-child(2){animation-delay:.2s}.typing-inline span:nth-child(3){animation-delay:.4s}
 @media (max-width: 480px){.ai-panel{width:calc(100vw - 24px);right:12px;bottom:12px}.ai-bubble{right:16px;bottom:16px}}
+
+.plantilla-cards-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+@media (max-width: 1100px){.plantilla-cards-grid{grid-template-columns:repeat(2,1fr)}}
+@media (max-width: 700px){.plantilla-cards-grid{grid-template-columns:1fr}}
+.bulkbar{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:55;padding:12px 16px;
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;box-shadow:0 20px 60px -20px rgba(0,0,0,.85)}
+.inline-edit-cell{cursor:pointer;border-radius:6px;transition:.15s;display:block;width:100%;min-height:1.4em;
+  padding:10px 12px;margin:-10px -12px}
+.inline-edit-cell:hover{background:rgba(255,255,255,.06)}
+.inline-edit-flash{animation:cellflash .9s ease}
+@keyframes cellflash{0%{background:rgba(0,200,150,.35)}100%{background:transparent}}
+.filter-chip{font-family:var(--mono);font-size:11px;padding:4px 6px 4px 10px;border-radius:999px;border:1px solid rgba(86,212,240,.4);
+  background:rgba(86,212,240,.12);color:#cdf3fc;display:inline-flex;align-items:center;gap:5px}
+.filter-chip button{background:none;border:none;color:inherit;cursor:pointer;display:inline-flex;padding:2px;border-radius:50%}
+.filter-chip button:hover{background:rgba(255,255,255,.15)}
 `;
 
 /* ---------- helpers ---------- */
@@ -787,21 +803,176 @@ function useGamificationLeaderboard(token, limit = 5) {
   return state;
 }
 
+// Campos editables inline en modo Lista (clic en la celda). RFC/CURP/NSS/
+// salario NUNCA aquí — van al Expediente completo, no a un input suelto.
+const INLINE_EDITABLE = {
+  depto:  { apiField: "department", type: "select", options: () => ORG.deptos },
+  turno:  { apiField: "shift", type: "select", options: () => TURNOS },
+  status: { apiField: "status", type: "select", options: () => Object.keys(STATUS) },
+  puesto: { apiField: "position", type: "text" },
+};
+const INLINE_ORDER = ["depto", "turno", "status", "puesto"];
+
+function initialsOf(name) {
+  return (name || "").trim().split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+}
+
+// Celda con clic-para-editar — Enter/blur guarda, Tab guarda y salta al
+// siguiente campo editable de la MISMA fila (Escape cancela sin guardar).
+function InlineCell({ emp, field, token, onSaved, children }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(emp[field] ?? "");
+  const [flash, setFlash] = useState(false);
+  const meta = INLINE_EDITABLE[field];
+
+  const commit = async (moveNext) => {
+    setEditing(false);
+    if (value === (emp[field] ?? "")) { if (moveNext) focusNext(); return; }
+    try {
+      await updateEmployee(token, emp.dbId, { [meta.apiField]: value });
+      setFlash(true);
+      setTimeout(() => setFlash(false), 900);
+      onSaved?.();
+    } catch (e) {
+      toast(e.message, "no");
+    }
+    if (moveNext) focusNext();
+  };
+
+  const focusNext = () => {
+    const idx = INLINE_ORDER.indexOf(field);
+    const nextField = INLINE_ORDER[idx + 1];
+    if (nextField) setTimeout(() => document.getElementById(`inline-${emp.dbId}-${nextField}`)?.click(), 30);
+  };
+
+  if (editing) {
+    return meta.type === "select" ? (
+      <select
+        className="select" autoFocus style={{ padding: "4px 22px 4px 8px", fontSize: 12.5, minWidth: 110 }}
+        value={value} onChange={(e) => setValue(e.target.value)}
+        onBlur={() => commit(false)}
+        onKeyDown={(e) => { if (e.key === "Enter") commit(false); if (e.key === "Tab") { e.preventDefault(); commit(true); } if (e.key === "Escape") setEditing(false); }}
+      >
+        {meta.options().map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+    ) : (
+      <input
+        className="input" autoFocus style={{ padding: "4px 8px", fontSize: 12.5, minWidth: 110 }}
+        value={value} onChange={(e) => setValue(e.target.value)}
+        onBlur={() => commit(false)}
+        onKeyDown={(e) => { if (e.key === "Enter") commit(false); if (e.key === "Tab") { e.preventDefault(); commit(true); } if (e.key === "Escape") setEditing(false); }}
+      />
+    );
+  }
+
+  return (
+    <span
+      id={`inline-${emp.dbId}-${field}`}
+      className={`inline-edit-cell${flash ? " inline-edit-flash" : ""}`}
+      title="Clic para editar"
+      onClick={(ev) => { ev.stopPropagation(); setValue(emp[field] ?? ""); setEditing(true); }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function EmployeeCard({ emp, neto, onOpen }) {
+  return (
+    <div className="glass-2" style={{ padding: 16, textAlign: "center", cursor: "pointer" }} onClick={onOpen}>
+      <div style={{ width: 56, height: 56, borderRadius: "50%", margin: "0 auto 10px", background: "linear-gradient(135deg,var(--cyan),var(--violet))", display: "grid", placeItems: "center", fontSize: 18, fontWeight: 700, color: "#04060a" }}>
+        {initialsOf(emp.nombre)}
+      </div>
+      <div style={{ fontWeight: 600, fontSize: 13.5 }}>{emp.nombre}</div>
+      <div className="muted2" style={{ fontSize: 11.5, marginTop: 2 }}>{emp.puesto || "—"} · {emp.depto || "—"}</div>
+      <div style={{ marginTop: 8 }}><StatusChip s={emp.status} /></div>
+      <div className="mono" style={{ marginTop: 8, fontWeight: 600, color: netoColor(neto) }}>{neto != null ? mxn2(neto) : "—"}</div>
+      {emp.streakDays > 7 && <div className="muted2" style={{ fontSize: 11, marginTop: 6 }}>🔥 {emp.streakDays} días</div>}
+    </div>
+  );
+}
+
+function AssignCourseModal({ token, employeeIds, onClose, onDone }) {
+  const [courses, setCourses] = useState({ status: "loading", data: [] });
+  const [courseId, setCourseId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    fetchCourses(token)
+      .then(({ data }) => { setCourses({ status: "ready", data: data || [] }); if (data?.[0]) setCourseId(data[0].id); })
+      .catch((e) => setCourses({ status: "error", data: [], error: e.message }));
+  }, [token]);
+
+  const doAssign = async () => {
+    if (!courseId) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await assignCourseBulk(token, courseId, employeeIds);
+      toast(`Curso asignado · ${res.assigned} nuevo(s)${res.alreadyAssigned ? `, ${res.alreadyAssigned} ya lo tenían` : ""}`);
+      onDone?.();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="glass" style={{ width: "min(420px,92vw)", padding: 22 }} onClick={(e) => e.stopPropagation()}>
+        <div className="row" style={{ gap: 9, marginBottom: 14 }}>
+          <GraduationCap size={17} className="muted" />
+          <span style={{ fontWeight: 600, fontSize: 14.5 }}>Asignar curso · {employeeIds.length} seleccionado{employeeIds.length > 1 ? "s" : ""}</span>
+        </div>
+        {courses.status === "loading" && <div className="muted" style={{ fontSize: 12.5 }}>Cargando cursos…</div>}
+        {courses.status === "error" && <div style={{ color: "var(--rose)", fontSize: 12.5 }}>{courses.error}</div>}
+        {courses.status === "ready" && courses.data.length === 0 && <div className="muted" style={{ fontSize: 12.5 }}>No hay cursos activos.</div>}
+        {courses.status === "ready" && courses.data.length > 0 && (
+          <select className="select" value={courseId} onChange={(e) => setCourseId(e.target.value)} style={{ marginBottom: 14 }}>
+            {courses.data.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+          </select>
+        )}
+        {error && <div style={{ color: "var(--rose)", fontSize: 12, marginBottom: 12 }}>{error}</div>}
+        <div className="row" style={{ gap: 10, justifyContent: "flex-end" }}>
+          <button className="btn" onClick={onClose} disabled={busy}>Cancelar</button>
+          <button className="btn btn-accent" onClick={doAssign} disabled={busy || !courseId}>{busy ? "Asignando…" : "Asignar"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Plantilla({ staff, token, openExpediente, socket, refreshStaff, initialStatusFilter }) {
-  const [q, setQ] = useState(""); const [fStatus, setFStatus] = useState(initialStatusFilter || "Todos"); const [fDepto, setFDepto] = useState("Todos");
+  const [q, setQ] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
+  useEffect(() => { const t = setTimeout(() => setDebouncedQ(q), 200); return () => clearTimeout(t); }, [q]);
+
+  const [fStatus, setFStatus] = useState(initialStatusFilter || "Todos");
+  const [fDepto, setFDepto] = useState("Todos");
+  const [fTurno, setFTurno] = useState("Todos");
+  const [fPlanta, setFPlanta] = useState("Todos");
+  const [fContrato, setFContrato] = useState("Todos");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [viewMode, setViewMode] = useState("lista"); // "lista" | "cards"
   const [nuevo, setNuevo] = useState(false);
-  const [sortNeto, setSortNeto] = useState(null); // null | "asc" | "desc"
+  const [sort, setSort] = useState({ key: null, dir: "desc" }); // key: nombre|id|depto|neto|ingreso
   const [selected, setSelected] = useState(() => new Set());
   const [page, setPage] = useState(1);
+  const [assignCourseOpen, setAssignCourseOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
   // staff ya viene completo en memoria (fetchEmployees trae todo el tenant en
-  // un solo fetch, ver api.js) — la paginación de Plantilla es sobre el
-  // arreglo ya filtrado, en cliente, no un refetch por página.
-  useEffect(() => { setPage(1); }, [q, fStatus, fDepto]);
+  // un solo fetch, ver api.js) — búsqueda/filtros/orden/paginación de
+  // Plantilla son todos sobre ese arreglo en cliente, no un refetch.
+  useEffect(() => { setPage(1); }, [debouncedQ, fStatus, fDepto, fTurno, fPlanta, fContrato]);
   const [confirmAction, setConfirmAction] = useState(null); // null | "limpiar" | "bajaSeleccionados" | "eliminarSeleccionados" | { type:"eliminar", emp }
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [confirmError, setConfirmError] = useState(null);
   const netoMap = usePayrollLatestMap(token);
   const deptos = ["Todos", ...ORG.deptos];
+  const turnos = ["Todos", ...TURNOS];
+  const plantas = ["Todos", ...ORG.plantas];
+  const contratos = ["Todos", ...CONTRATOS];
 
   // Otro admin/pestaña puede editar o dar de baja empleados — nos refrescamos
   // solos en vez de mostrar una plantilla obsoleta.
@@ -813,20 +984,50 @@ function Plantilla({ staff, token, openExpediente, socket, refreshStaff, initial
     return () => { socket.off("employee:updated", onChanged); socket.off("employees:bulk_changed", onChanged); };
   }, [socket, refreshStaff]);
 
-  let rows = staff.filter((e) =>
-    (q === "" || e.nombre.toLowerCase().includes(q.toLowerCase()) || e.id.toLowerCase().includes(q.toLowerCase())) &&
-    (fStatus === "Todos" || e.status === fStatus) && (fDepto === "Todos" || e.depto === fDepto));
-  if (sortNeto) {
+  const query = debouncedQ.trim().toLowerCase();
+  let rows = staff.filter((e) => {
+    const matchesQuery = query === "" ||
+      e.nombre?.toLowerCase().includes(query) || e.id?.toLowerCase().includes(query) ||
+      e.rfc?.toLowerCase().includes(query) || e.puesto?.toLowerCase().includes(query);
+    return matchesQuery &&
+      (fStatus === "Todos" || e.status === fStatus) && (fDepto === "Todos" || e.depto === fDepto) &&
+      (fTurno === "Todos" || e.turno === fTurno) && (fPlanta === "Todos" || e.planta === fPlanta) &&
+      (fContrato === "Todos" || e.contrato === fContrato);
+  });
+
+  if (sort.key) {
     rows = [...rows].sort((a, b) => {
-      const av = netoMap[a.dbId]?.netPay != null ? Number(netoMap[a.dbId].netPay) : -1;
-      const bv = netoMap[b.dbId]?.netPay != null ? Number(netoMap[b.dbId].netPay) : -1;
-      return sortNeto === "asc" ? av - bv : bv - av;
+      let av, bv;
+      if (sort.key === "neto") {
+        av = netoMap[a.dbId]?.netPay != null ? Number(netoMap[a.dbId].netPay) : -1;
+        bv = netoMap[b.dbId]?.netPay != null ? Number(netoMap[b.dbId].netPay) : -1;
+      } else if (sort.key === "ingreso") {
+        av = a.ingreso || ""; bv = b.ingreso || "";
+      } else {
+        av = String(a[sort.key] || "").toLowerCase(); bv = String(b[sort.key] || "").toLowerCase();
+      }
+      if (av < bv) return sort.dir === "asc" ? -1 : 1;
+      if (av > bv) return sort.dir === "asc" ? 1 : -1;
+      return 0;
     });
   }
-  const toggleSortNeto = () => setSortNeto((s) => (s === "desc" ? "asc" : s === "asc" ? null : "desc"));
+  const toggleSort = (key) => setSort((s) => (s.key !== key ? { key, dir: "desc" } : s.dir === "desc" ? { key, dir: "asc" } : { key: null, dir: "desc" }));
+  const sortArrow = (key) => (sort.key !== key ? "" : sort.dir === "desc" ? " ↓" : " ↑");
 
   const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  const statusCounts = {};
+  for (const e of rows) statusCounts[e.status] = (statusCounts[e.status] || 0) + 1;
+
+  const activeFilters = [
+    fStatus !== "Todos" && { label: fStatus, clear: () => setFStatus("Todos") },
+    fDepto !== "Todos" && { label: fDepto, clear: () => setFDepto("Todos") },
+    fTurno !== "Todos" && { label: fTurno, clear: () => setFTurno("Todos") },
+    fPlanta !== "Todos" && { label: fPlanta, clear: () => setFPlanta("Todos") },
+    fContrato !== "Todos" && { label: fContrato, clear: () => setFContrato("Todos") },
+  ].filter(Boolean);
+  const clearAllFilters = () => { setFStatus("Todos"); setFDepto("Todos"); setFTurno("Todos"); setFPlanta("Todos"); setFContrato("Todos"); };
 
   const toggleOne = (dbId) => setSelected((s) => { const next = new Set(s); if (next.has(dbId)) next.delete(dbId); else next.add(dbId); return next; });
   const allVisibleSelected = pageRows.length > 0 && pageRows.every((e) => selected.has(e.dbId));
@@ -840,6 +1041,26 @@ function Plantilla({ staff, token, openExpediente, socket, refreshStaff, initial
     const chosen = rows.filter((e) => selected.has(e.dbId));
     download(`plantilla_seleccion_${todayISO}.csv`, toCSV(chosen));
     toast(`CSV exportado · ${chosen.length} filas`);
+  };
+
+  const doExport = async () => {
+    toast(`Exportando ${rows.length} registros…`);
+    setExporting(true);
+    try {
+      const { blob, filename } = await exportEmployeesCsv(token, {
+        status:       fStatus !== "Todos" ? fStatus : undefined,
+        department:   fDepto !== "Todos" ? fDepto : undefined,
+        shift:        fTurno !== "Todos" ? fTurno : undefined,
+        plant:        fPlanta !== "Todos" ? fPlanta : undefined,
+        contractType: fContrato !== "Todos" ? fContrato : undefined,
+        search:       debouncedQ || undefined,
+      });
+      downloadBlobFile(filename, blob);
+    } catch (e) {
+      toast(e.message, "no");
+    } finally {
+      setExporting(false);
+    }
   };
 
   const closeConfirm = () => { setConfirmAction(null); setConfirmError(null); };
@@ -871,76 +1092,144 @@ function Plantilla({ staff, token, openExpediente, socket, refreshStaff, initial
     <div className="fadein">
       <Eyebrow>Plantilla · {staff.length} colaboradores</Eyebrow>
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: "5px 0 16px" }}>Consulta de personal</h1>
-      <div className="row" style={{ gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+
+      <div className="row" style={{ gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
         <div className="row glass-2" style={{ padding: "0 11px", flex: 1, minWidth: 220, gap: 8 }}>
           <Search size={15} className="muted" />
-          <input className="input" style={{ border: "none", background: "transparent", padding: "10px 0" }} placeholder="Buscar por nombre o ID…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input
+            className="input" style={{ border: "none", background: "transparent", padding: "10px 0" }}
+            placeholder="Buscar por nombre, RFC, clave o puesto…" value={q} onChange={(e) => setQ(e.target.value)}
+          />
+          {q && <button className="btn btn-sm" style={{ padding: 4 }} onClick={() => setQ("")}><X size={12} /></button>}
         </div>
-        <select className="select" style={{ width: 160 }} value={fStatus} onChange={(e) => setFStatus(e.target.value)}><option>Todos</option>{Object.keys(STATUS).map((s) => <option key={s}>{s}</option>)}<option>Baja</option></select>
-        <select className="select" style={{ width: 180 }} value={fDepto} onChange={(e) => setFDepto(e.target.value)}>{deptos.map((d) => <option key={d}>{d}</option>)}</select>
+        <button className="btn" onClick={() => setFiltersOpen((v) => !v)}>
+          <Filter size={14} />Filtros{activeFilters.length > 0 ? ` (${activeFilters.length})` : ""}
+        </button>
+        <div className="row glass-2" style={{ padding: 3, gap: 2 }}>
+          <button className={`tabbtn ${viewMode === "lista" ? "on" : ""}`} onClick={() => setViewMode("lista")}><ListIcon size={13} />Lista</button>
+          <button className={`tabbtn ${viewMode === "cards" ? "on" : ""}`} onClick={() => setViewMode("cards")}><LayoutGrid size={13} />Cards</button>
+        </div>
         <button className="btn btn-accent" onClick={() => setNuevo(true)}><Plus size={14} />Agregar empleado</button>
-        <button className="btn" onClick={() => { download(`plantilla_gfp_${todayISO}.csv`, toCSV(rows)); toast(`CSV exportado · ${rows.length} filas`); }}><Download size={14} />Exportar CSV</button>
+        <button className="btn" disabled={exporting} onClick={doExport}><Download size={14} />{exporting ? "Exportando…" : "Exportar"}</button>
         <button className="btn" style={{ color: "var(--rose)" }} onClick={() => setConfirmAction("limpiar")}><Trash2 size={14} />Limpiar plantilla</button>
       </div>
 
-      {selected.size > 0 && (
-        <div className="glass-2 row" style={{ padding: "10px 14px", marginBottom: 12, gap: 10, flexWrap: "wrap" }}>
-          <span className="chip" style={{ color: "var(--cyan)" }}>{selected.size} seleccionado{selected.size > 1 ? "s" : ""}</span>
-          <button className="btn btn-sm" onClick={() => setConfirmAction("bajaSeleccionados")}>Dar de baja seleccionados</button>
-          <button className="btn btn-sm" style={{ color: "var(--rose)" }} onClick={() => setConfirmAction("eliminarSeleccionados")}>Eliminar seleccionados</button>
-          <button className="btn btn-sm" onClick={exportSelected}><Download size={12} />Exportar seleccionados</button>
+      {filtersOpen && (
+        <div className="row glass-2" style={{ padding: 12, gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+          <select className="select" style={{ width: 170 }} value={fStatus} onChange={(e) => setFStatus(e.target.value)}><option>Todos</option>{Object.keys(STATUS).map((s) => <option key={s}>{s}</option>)}<option>Baja</option></select>
+          <select className="select" style={{ width: 190 }} value={fDepto} onChange={(e) => setFDepto(e.target.value)}>{deptos.map((d) => <option key={d}>{d}</option>)}</select>
+          <select className="select" style={{ width: 150 }} value={fTurno} onChange={(e) => setFTurno(e.target.value)}>{turnos.map((t) => <option key={t}>{t}</option>)}</select>
+          <select className="select" style={{ width: 190 }} value={fPlanta} onChange={(e) => setFPlanta(e.target.value)}>{plantas.map((p) => <option key={p}>{p}</option>)}</select>
+          <select className="select" style={{ width: 190 }} value={fContrato} onChange={(e) => setFContrato(e.target.value)}>{contratos.map((c) => <option key={c}>{c}</option>)}</select>
         </div>
       )}
 
-      <div className="glass" style={{ overflow: "hidden", padding: 0 }}>
-        <div style={{ maxHeight: 520, overflowY: "auto" }}>
-          <table className="tbl">
-            <thead style={{ position: "sticky", top: 0, background: "rgba(8,12,20,.92)", backdropFilter: "blur(8px)" }}>
-              <tr>
-                <th style={{ width: 30 }} onClick={toggleAll}>
-                  <span style={{ cursor: "pointer", display: "inline-flex" }}>{allVisibleSelected ? <CheckSquare size={15} color="var(--cyan)" /> : <Square size={15} />}</span>
-                </th>
-                <th>ID</th><th>Colaborador</th><th>Área</th><th>Turno</th><th>Contrato</th><th>Antig.</th><th>Estatus</th>
-                <th style={{ cursor: "pointer", userSelect: "none" }} onClick={toggleSortNeto}>Último neto {sortNeto === "desc" ? "↓" : sortNeto === "asc" ? "↑" : ""}</th>
-                <th></th></tr>
-            </thead>
-            <tbody>
-              {pageRows.map((e) => {
-                const neto = netoMap[e.dbId]?.netPay != null ? Number(netoMap[e.dbId].netPay) : null;
-                const isSel = selected.has(e.dbId);
-                return (
-                  <tr key={e.id} onClick={() => openExpediente?.(e, "nomina")}>
-                    <td onClick={(ev) => { ev.stopPropagation(); toggleOne(e.dbId); }}>
-                      <span style={{ cursor: "pointer", display: "inline-flex" }}>{isSel ? <CheckSquare size={15} color="var(--cyan)" /> : <Square size={15} />}</span>
-                    </td>
-                    <td className="mono muted2">{e.id}</td>
-                    <td style={{ fontWeight: 500 }}>{e.nombre}</td>
-                    <td className="muted">{e.depto}</td>
-                    <td><span className="chip" style={{ color: TURNO_COLOR[e.turno] }}>{e.turno}</span></td>
-                    <td><span className="chip">{e.contrato}</span></td>
-                    <td className="mono muted">{e.antiguedad}a</td>
-                    <td><StatusChip s={e.status} /></td>
-                    <td className="mono" style={{ color: netoColor(neto), fontWeight: 500 }}>{neto != null ? mxn2(neto) : "—"}</td>
-                    <td onClick={(ev) => ev.stopPropagation()}>
-                      <div className="row" style={{ gap: 6, justifyContent: "flex-end" }}>
-                        <button className="btn btn-sm" title="Editar" onClick={() => openExpediente?.(e, "resumen")}><Pencil size={12} /></button>
-                        <button className="btn btn-sm" title="Eliminar" style={{ color: "var(--rose)" }} onClick={() => setConfirmAction({ type: "eliminar", emp: e })}><Trash2 size={12} /></button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      {activeFilters.length > 0 && (
+        <div className="row" style={{ gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+          {activeFilters.map((f) => (
+            <span key={f.label} className="filter-chip">{f.label}<button onClick={f.clear}><X size={10} /></button></span>
+          ))}
+          <span className="muted2" style={{ fontSize: 11.5, cursor: "pointer", textDecoration: "underline" }} onClick={clearAllFilters}>Limpiar filtros</span>
         </div>
+      )}
+
+      <div className="muted2" style={{ fontSize: 11.5, marginBottom: 12 }}>
+        {query ? `${rows.length} ${rows.length === 1 ? "resultado" : "resultados"} para "${debouncedQ}"` : `Mostrando ${rows.length === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}-${Math.min(rows.length, page * PAGE_SIZE)} de ${rows.length} colaboradores`}
+        {Object.entries(statusCounts).map(([s, n]) => ` · ${n} ${s.toLowerCase()}`).join("")}
       </div>
+
+      {viewMode === "cards" ? (
+        <div className="plantilla-cards-grid">
+          {pageRows.map((e) => (
+            <EmployeeCard key={e.id} emp={e} neto={netoMap[e.dbId]?.netPay != null ? Number(netoMap[e.dbId].netPay) : null} onOpen={() => openExpediente?.(e, "resumen")} />
+          ))}
+        </div>
+      ) : (
+        <div className="glass" style={{ overflow: "hidden", padding: 0 }}>
+          <div style={{ maxHeight: 520, overflowY: "auto" }}>
+            <table className="tbl">
+              <thead style={{ position: "sticky", top: 0, background: "rgba(8,12,20,.92)", backdropFilter: "blur(8px)" }}>
+                <tr>
+                  <th style={{ width: 30 }} onClick={toggleAll}>
+                    <span style={{ cursor: "pointer", display: "inline-flex" }}>{allVisibleSelected ? <CheckSquare size={15} color="var(--cyan)" /> : <Square size={15} />}</span>
+                  </th>
+                  <th style={{ cursor: "pointer", userSelect: "none" }} onClick={() => toggleSort("id")}>Clave{sortArrow("id")}</th>
+                  <th style={{ cursor: "pointer", userSelect: "none" }} onClick={() => toggleSort("nombre")}>Colaborador{sortArrow("nombre")}</th>
+                  <th style={{ cursor: "pointer", userSelect: "none" }} onClick={() => toggleSort("depto")}>Área{sortArrow("depto")}</th>
+                  <th>Turno</th><th>Contrato</th>
+                  <th style={{ cursor: "pointer", userSelect: "none" }} onClick={() => toggleSort("ingreso")}>Antig.{sortArrow("ingreso")}</th>
+                  <th>Estatus</th>
+                  <th style={{ cursor: "pointer", userSelect: "none" }} onClick={() => toggleSort("neto")}>Último neto{sortArrow("neto")}</th>
+                  <th></th></tr>
+              </thead>
+              <tbody>
+                {pageRows.map((e) => {
+                  const neto = netoMap[e.dbId]?.netPay != null ? Number(netoMap[e.dbId].netPay) : null;
+                  const isSel = selected.has(e.dbId);
+                  return (
+                    <tr key={e.id} onClick={() => openExpediente?.(e, "nomina")}>
+                      <td onClick={(ev) => { ev.stopPropagation(); toggleOne(e.dbId); }}>
+                        <span style={{ cursor: "pointer", display: "inline-flex" }}>{isSel ? <CheckSquare size={15} color="var(--cyan)" /> : <Square size={15} />}</span>
+                      </td>
+                      <td className="mono muted2">{e.id}</td>
+                      <td style={{ fontWeight: 500 }}>
+                        {e.nombre}
+                        <div className="muted2" style={{ fontSize: 11 }} onClick={(ev) => ev.stopPropagation()}>
+                          <InlineCell emp={e} field="puesto" token={token} onSaved={refreshStaff}>{e.puesto || "— puesto —"}</InlineCell>
+                        </div>
+                      </td>
+                      <td className="muted" onClick={(ev) => ev.stopPropagation()}>
+                        <InlineCell emp={e} field="depto" token={token} onSaved={refreshStaff}>{e.depto || "—"}</InlineCell>
+                      </td>
+                      <td onClick={(ev) => ev.stopPropagation()}>
+                        <InlineCell emp={e} field="turno" token={token} onSaved={refreshStaff}><span className="chip" style={{ color: TURNO_COLOR[e.turno] }}>{e.turno || "—"}</span></InlineCell>
+                      </td>
+                      <td><span className="chip">{e.contrato}</span></td>
+                      <td className="mono muted">{e.antiguedad}a</td>
+                      <td onClick={(ev) => ev.stopPropagation()}>
+                        <InlineCell emp={e} field="status" token={token} onSaved={refreshStaff}><StatusChip s={e.status} /></InlineCell>
+                      </td>
+                      <td className="mono" style={{ color: netoColor(neto), fontWeight: 500 }}>{neto != null ? mxn2(neto) : "—"}</td>
+                      <td onClick={(ev) => ev.stopPropagation()}>
+                        <div className="row" style={{ gap: 6, justifyContent: "flex-end" }}>
+                          <button className="btn btn-sm" title="Editar" onClick={() => openExpediente?.(e, "resumen")}><Pencil size={12} /></button>
+                          <button className="btn btn-sm" title="Eliminar" style={{ color: "var(--rose)" }} onClick={() => setConfirmAction({ type: "eliminar", emp: e })}><Trash2 size={12} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
       <Pagination page={page} totalPages={totalPages} total={rows.length} limit={PAGE_SIZE} onPageChange={setPage} itemLabel="colaboradores" />
+
+      {selected.size > 0 && (
+        <div className="glass bulkbar">
+          <span className="chip" style={{ color: "var(--cyan)" }}>{selected.size} seleccionado{selected.size > 1 ? "s" : ""}</span>
+          <button className="btn btn-sm" onClick={exportSelected}><Download size={12} />Exportar</button>
+          <button className="btn btn-sm" onClick={() => setAssignCourseOpen(true)}><GraduationCap size={12} />Asignar curso</button>
+          <button className="btn btn-sm" style={{ color: "var(--rose)" }} onClick={() => setConfirmAction("bajaSeleccionados")}>⬇ Dar de baja</button>
+          <button className="btn btn-sm" onClick={() => setSelected(new Set())}><X size={12} />Cancelar</button>
+        </div>
+      )}
 
       {nuevo && (
         <NuevoDrawer
           token={token}
           onClose={() => setNuevo(false)}
           onCreated={(nombre) => { setNuevo(false); refreshStaff?.(); toast(`Alta registrada · ${nombre}`); }}
+        />
+      )}
+
+      {assignCourseOpen && (
+        <AssignCourseModal
+          token={token}
+          employeeIds={Array.from(selected)}
+          onClose={() => setAssignCourseOpen(false)}
+          onDone={() => setAssignCourseOpen(false)}
         />
       )}
 

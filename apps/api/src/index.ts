@@ -81,6 +81,11 @@ app.use(cors({
     callback(new Error('Origen no permitido por CORS'))
   },
   credentials: true,
+  // Sin esto, fetch() en el navegador no puede leer Content-Disposition en
+  // una respuesta cross-origin — los downloads (agente, export CSV, NDA,
+  // documentos médicos) caen todos al nombre de archivo genérico de
+  // fallback en vez del nombre real que manda el servidor.
+  exposedHeaders: ['Content-Disposition'],
 }))
 app.use(morgan('dev'))
 app.use(express.json({ limit: '10mb' }))
