@@ -317,6 +317,11 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.actas (
   status          TEXT        DEFAULT 'Borrador',
   -- Borrador | Firmada | Impugnada | Archivada
 
+  -- Testigo digital — cadena de custodia (ver acta_signatures abajo)
+  document_hash    TEXT,        -- SHA256 del documento final, una vez FIRMADA
+  finalized_at      TIMESTAMPTZ, -- cuándo se completaron las 4 firmas
+  signature_count   INTEGER     DEFAULT 0,
+
   issued_by       TEXT,                    -- admin user id
   created_at      TIMESTAMPTZ DEFAULT NOW(),
   updated_at      TIMESTAMPTZ DEFAULT NOW()
@@ -350,6 +355,34 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.supervisor_incidents (
 CREATE INDEX idx_supervisor_incidents_emp    ON {SCHEMA}.supervisor_incidents (employee_id);
 CREATE INDEX idx_supervisor_incidents_reporter ON {SCHEMA}.supervisor_incidents (reported_by);
 CREATE INDEX idx_supervisor_incidents_date   ON {SCHEMA}.supervisor_incidents (created_at DESC);
+
+-- ─── ACTA SIGNATURES (testigo digital) ─────────────────────────
+-- Cadena de custodia inmutable para tribunales JFCA: un renglón por firmante
+-- (colaborador, 2 testigos, RH) con hash SHA256, IP, dispositivo y geo.
+
+CREATE TABLE IF NOT EXISTS {SCHEMA}.acta_signatures (
+  id              TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  acta_id         TEXT        REFERENCES {SCHEMA}.actas(id) ON DELETE CASCADE,
+  employee_id     TEXT        REFERENCES {SCHEMA}.employees(id),
+  role            TEXT        NOT NULL,
+  -- subject | witness_1 | witness_2 | hr_manager
+
+  signed_at       TIMESTAMPTZ,
+  signature_hash  TEXT,        -- SHA256(acta_id + employee_id + signed_at + secret)
+  ip_address      TEXT,
+  device_info     TEXT,
+  location_lat    NUMERIC,
+  location_lng    NUMERIC,
+  location_mock   BOOLEAN     DEFAULT true,
+
+  declined        BOOLEAN     DEFAULT false,   -- "no estoy de acuerdo" — no bloquea el acta
+  declined_reason TEXT,
+
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT uq_acta_signature_role UNIQUE (acta_id, role)
+);
+
+CREATE INDEX idx_acta_signatures_acta ON {SCHEMA}.acta_signatures (acta_id);
 
 -- ─── COURSES (LMS) ────────────────────────────────────────────
 

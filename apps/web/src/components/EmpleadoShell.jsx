@@ -5,7 +5,7 @@ import {
   Home, Receipt, CalendarDays, Inbox, Megaphone, Bot, Bell,
   X, Check, ChevronRight, ChevronDown, ChevronLeft, Send, Loader2,
   Award, Flame, AlertTriangle, DollarSign, Clock, FileText, Lock, LogIn, LogOut, MapPin,
-  ArrowUp, ArrowDown, Users,
+  ArrowUp, ArrowDown, Users, PenTool, ShieldCheck, XCircle,
 } from "lucide-react";
 
 /* ---------- toast bus (mismo patrón que App.jsx, con estilos emp-*) ---------- */
@@ -736,6 +736,17 @@ body{font-family:'DM Sans',system-ui,-apple-system,"Segoe UI",sans-serif}
 .team-graph-expand-name{font-size:6.5px;font-weight:700;color:var(--text-primary);white-space:nowrap;max-width:56px;overflow:hidden;text-overflow:ellipsis}
 .team-graph-expand-pos{font-size:5.5px;color:var(--text-secondary);white-space:nowrap;max-width:56px;overflow:hidden;text-overflow:ellipsis}
 .team-graph-expand-meta{font-size:5px;color:var(--text-muted);white-space:nowrap;max-width:56px;overflow:hidden;text-overflow:ellipsis}
+
+.acta-firma-wrap{position:relative;z-index:1;max-width:460px;margin:0 auto;min-height:100vh;padding:32px 18px 40px;display:flex;flex-direction:column;gap:14px}
+.acta-firma-logo{text-align:center;font-size:15px;font-weight:700;color:var(--accent-blue-bright);letter-spacing:-.01em;margin-bottom:6px}
+.acta-firma-card{background:var(--surface-1);backdrop-filter:blur(20px) saturate(180%);-webkit-backdrop-filter:blur(20px) saturate(180%);
+  border:1px solid var(--border-dim);border-radius:16px;padding:20px}
+.acta-firma-title{font-size:19px;font-weight:600;margin-top:4px}
+.acta-firma-employee{margin-top:14px;padding-top:14px;border-top:1px solid var(--border-dim)}
+.acta-firma-content{max-height:42vh;overflow-y:auto}
+.acta-firma-reason{font-size:13.5px;line-height:1.6;color:var(--text-secondary);white-space:pre-wrap}
+.acta-firma-actions{display:flex;flex-direction:column;gap:10px;margin-top:4px}
+.acta-firma-check{width:56px;height:56px;border-radius:50%;background:var(--accent-green);display:flex;align-items:center;justify-content:center;margin:0 auto}
 `;
 
 // ── transiciones — editorial: crossfade puro, sin spring ni desplazamiento ──
@@ -2491,6 +2502,202 @@ function TeamGraphView({ token, employee, onClose }) {
         )}
       </AnimatePresence>
     </motion.div>
+  );
+}
+
+// ── ACTA · FIRMA DIGITAL (testigo digital) ──────────────────────
+// Vista pública, sin login — el link llega por WhatsApp/copiar-link.
+// Ruta: /acta-firma/:token (ver main.jsx). Pantalla completa, sin nav.
+
+const ACTA_TYPE_LABEL = {
+  'Amonestación verbal':   'Amonestación verbal',
+  'Amonestación escrita':  'Amonestación escrita',
+  'Suspensión':            'Suspensión',
+  'Baja justificada':      'Baja justificada',
+  'Acta administrativa':   'Acta administrativa',
+};
+
+async function actaFetch(path, opts = {}) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...opts,
+    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `Error (${res.status})`);
+  return body;
+}
+
+export function ActaFirmaView({ token }) {
+  const [stage, setStage] = useState("loading"); // loading | ready | confirm_sign | confirm_decline | success | declined | error
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+  const [coords, setCoords] = useState(null);
+  const [coordsMock, setCoordsMock] = useState(true);
+  const [declineReason, setDeclineReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+
+  useEffect(() => {
+    actaFetch(`/api/actas/sign/${token}`)
+      .then((d) => {
+        setData(d);
+        if (d.alreadySigned) setStage("success");
+        else if (d.alreadyDeclined) setStage("declined");
+        else setStage("ready");
+      })
+      .catch((e) => { setError(e.message); setStage("error"); });
+  }, [token]);
+
+  const askLocation = () => {
+    if (!navigator.geolocation) { setCoords(null); setCoordsMock(true); setStage("confirm_sign"); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => { setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude }); setCoordsMock(false); setStage("confirm_sign"); },
+      () => { setCoords(null); setCoordsMock(true); setStage("confirm_sign"); },
+      { timeout: 5000 }
+    );
+  };
+
+  const confirmSign = async () => {
+    setBusy(true); setError(null);
+    try {
+      const r = await actaFetch(`/api/actas/sign/${token}`, {
+        method: "POST",
+        body: JSON.stringify({ locationLat: coords?.lat, locationLng: coords?.lng, locationMock: coordsMock }),
+      });
+      setResult(r);
+      setStage("success");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmDecline = async () => {
+    setBusy(true); setError(null);
+    try {
+      await actaFetch(`/api/actas/sign/${token}/decline`, {
+        method: "POST",
+        body: JSON.stringify({ reason: declineReason.trim() || undefined }),
+      });
+      setStage("declined");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="empshell">
+      <style>{CSS}</style>
+      <div className="emp-bgwash" />
+      <div className="acta-firma-wrap">
+        <div className="acta-firma-logo">✦ CÓDICE</div>
+
+        {stage === "loading" && (
+          <div className="acta-firma-card" style={{ textAlign: "center" }}>
+            <Loader2 size={22} className="spin" />
+            <div className="emp-muted" style={{ marginTop: 10 }}>Cargando documento…</div>
+          </div>
+        )}
+
+        {stage === "error" && (
+          <div className="acta-firma-card" style={{ textAlign: "center" }}>
+            <AlertTriangle size={28} color="var(--accent-red)" />
+            <div style={{ fontWeight: 600, marginTop: 10 }}>No se pudo cargar el documento</div>
+            <div className="emp-muted" style={{ fontSize: 13, marginTop: 6 }}>{error}</div>
+          </div>
+        )}
+
+        {stage === "ready" && data && (
+          <>
+            <div className="acta-firma-card">
+              <div className="emp-eyebrow">Acta administrativa</div>
+              <div className="acta-firma-title">{data.tenantName}</div>
+              <div className="emp-muted" style={{ fontSize: 13, marginTop: 2 }}>{fmtDate(data.acta.issueDate)}</div>
+              <div className="acta-firma-employee">
+                <div style={{ fontWeight: 600 }}>{data.employeeName}</div>
+                <div className="emp-muted" style={{ fontSize: 12 }}>Firmando como: {data.label}</div>
+              </div>
+            </div>
+
+            <div className="acta-firma-card acta-firma-content">
+              <div className="emp-label">Tipo</div>
+              <div style={{ marginBottom: 14 }}>{ACTA_TYPE_LABEL[data.acta.type] || data.acta.type}</div>
+              {data.acta.incidentDate && (
+                <>
+                  <div className="emp-label">Fecha del incidente</div>
+                  <div style={{ marginBottom: 14 }}>{fmtDate(data.acta.incidentDate)}</div>
+                </>
+              )}
+              <div className="emp-label">Descripción de los hechos</div>
+              <div className="acta-firma-reason">{data.acta.reason}</div>
+            </div>
+
+            <div className="acta-firma-actions">
+              <button className="emp-btn-primary" onClick={askLocation}>
+                <PenTool size={18} /> Firmar digitalmente
+              </button>
+              <button className="emp-btn-secondary" style={{ borderColor: "rgba(239,68,68,.4)", color: "var(--accent-red)" }} onClick={() => setStage("confirm_decline")}>
+                <XCircle size={18} /> No estoy de acuerdo
+              </button>
+            </div>
+          </>
+        )}
+
+        {stage === "confirm_sign" && (
+          <div className="acta-firma-card">
+            <ShieldCheck size={26} color="var(--accent-green)" />
+            <div style={{ fontWeight: 600, marginTop: 10, marginBottom: 8 }}>Confirmar firma</div>
+            <div className="emp-muted" style={{ fontSize: 13, lineHeight: 1.6 }}>
+              Al firmar confirmas que has leído este documento.<br />
+              Tu firma quedará registrada con fecha, hora y dispositivo.
+            </div>
+            {error && <div style={{ color: "var(--accent-red)", fontSize: 12.5, marginTop: 10 }}>{error}</div>}
+            <button className="emp-btn-primary" style={{ marginTop: 16 }} disabled={busy} onClick={confirmSign}>
+              {busy ? <Loader2 size={18} className="spin" /> : <Check size={18} />} Confirmar firma
+            </button>
+            <button className="emp-btn-secondary" style={{ marginTop: 10 }} disabled={busy} onClick={() => setStage("ready")}>Cancelar</button>
+          </div>
+        )}
+
+        {stage === "confirm_decline" && (
+          <div className="acta-firma-card">
+            <div style={{ fontWeight: 600, marginBottom: 10 }}>Motivo de inconformidad (opcional)</div>
+            <textarea className="emp-textarea" rows={4} placeholder="Explica brevemente tu inconformidad…" value={declineReason} onChange={(e) => setDeclineReason(e.target.value)} />
+            {error && <div style={{ color: "var(--accent-red)", fontSize: 12.5, marginTop: 10 }}>{error}</div>}
+            <button className="emp-btn-primary" style={{ marginTop: 14 }} disabled={busy} onClick={confirmDecline}>
+              {busy ? <Loader2 size={18} className="spin" /> : <XCircle size={18} />} Confirmar inconformidad
+            </button>
+            <button className="emp-btn-secondary" style={{ marginTop: 10 }} disabled={busy} onClick={() => setStage("ready")}>Cancelar</button>
+          </div>
+        )}
+
+        {stage === "success" && (
+          <div className="acta-firma-card" style={{ textAlign: "center" }}>
+            <div className="acta-firma-check"><Check size={28} color="#04060a" /></div>
+            <div style={{ fontWeight: 700, fontSize: 16, marginTop: 12 }}>Firma registrada</div>
+            <div style={{ marginTop: 14, textAlign: "left" }}>
+              <div className="emp-row" style={{ justifyContent: "space-between", padding: "4px 0" }}><span className="emp-muted" style={{ fontSize: 12 }}>Folio</span><span className="mono" style={{ fontSize: 12.5 }}>{result?.folio || data?.acta?.folio || "—"}</span></div>
+              <div className="emp-row" style={{ justifyContent: "space-between", padding: "4px 0" }}><span className="emp-muted" style={{ fontSize: 12 }}>Fecha</span><span className="mono" style={{ fontSize: 12.5 }}>{fmtDate(result?.signedAt || new Date())}</span></div>
+              {result?.hash && <div className="emp-row" style={{ justifyContent: "space-between", padding: "4px 0" }}><span className="emp-muted" style={{ fontSize: 12 }}>Hash</span><span className="mono" style={{ fontSize: 11.5 }}>{result.hash.slice(0, 16)}…</span></div>}
+            </div>
+            <div className="emp-muted" style={{ fontSize: 12, marginTop: 14 }}>Este documento tiene validez legal.</div>
+          </div>
+        )}
+
+        {stage === "declined" && (
+          <div className="acta-firma-card" style={{ textAlign: "center" }}>
+            <AlertTriangle size={28} color="var(--accent-amber)" />
+            <div style={{ fontWeight: 700, fontSize: 16, marginTop: 12 }}>Tu inconformidad ha sido registrada</div>
+            <div className="emp-muted" style={{ fontSize: 13, marginTop: 8, lineHeight: 1.6 }}>
+              El acta continúa su proceso.<br />Puedes solicitar asesoría a tu área de RH.
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

@@ -38,6 +38,7 @@ import {
   fetchEmployee,
   fetchZktecoDevices, registerZktecoDevice, deleteZktecoDevice,
   exportEmployeesCsv, fetchCourses, assignCourseBulk,
+  fetchActas, fetchActa, createActa, fetchActaPdf, notifyActaSigner,
 } from "./api.js";
 
 // Credenciales de auto-login del cockpit admin (tenant único GFP). Vienen de
@@ -1812,7 +1813,224 @@ function SaludTab({ e, token, health }) {
   );
 }
 
-function ProfileDrawer({ e, onClose, setStatus, update, token, initialTab }) {
+/* ============================================================
+   ACTAS · testigo digital — cadena de custodia para amonestaciones,
+   suspensiones y bajas. Ver apps/api/src/routes/actas.ts.
+   ============================================================ */
+
+const ACTA_TYPES = ['Amonestación verbal', 'Amonestación escrita', 'Suspensión', 'Baja justificada'];
+
+function ActaWitnessPicker({ staff, exclude, value, onChange, label }) {
+  const [q, setQ] = useState("");
+  const selected = staff.find((s) => s.dbId === value);
+  const options = staff.filter((s) =>
+    s.status === "Activo" && !exclude.includes(s.dbId) && (q === "" || s.nombre.toLowerCase().includes(q.toLowerCase())));
+  return (
+    <div>
+      <label className="fld">{label}</label>
+      {selected ? (
+        <div className="row glass-2" style={{ padding: "8px 12px", justifyContent: "space-between" }}>
+          <span style={{ fontSize: 12.5 }}>{selected.nombre}</span>
+          <X size={13} style={{ cursor: "pointer" }} onClick={() => onChange(null)} />
+        </div>
+      ) : (
+        <>
+          <input className="input" placeholder="Buscar colaborador…" value={q} onChange={(ev) => setQ(ev.target.value)} />
+          {q && (
+            <div className="glass-2" style={{ maxHeight: 130, overflowY: "auto", marginTop: 4 }}>
+              {options.slice(0, 8).map((s) => (
+                <div key={s.dbId} style={{ padding: "7px 10px", cursor: "pointer", fontSize: 12 }} onClick={() => { onChange(s.dbId); setQ(""); }}>{s.nombre} · {s.depto}</div>
+              ))}
+              {options.length === 0 && <div className="muted2" style={{ padding: 8, fontSize: 11.5 }}>Sin resultados</div>}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function NuevaActaForm({ e, token, staff, onCreated, onCancel }) {
+  const [tipo, setTipo] = useState(ACTA_TYPES[0]);
+  const [descripcion, setDescripcion] = useState("");
+  const [w1, setW1] = useState(null);
+  const [w2, setW2] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const submit = async () => {
+    if (!descripcion.trim() || !w1 || !w2) { setError("Completa la descripción y ambos testigos"); return; }
+    setBusy(true); setError(null);
+    try {
+      const res = await createActa(token, { employeeId: e.dbId, type: tipo, description: descripcion.trim(), witnesses: [w1, w2] });
+      onCreated(res);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="glass-2" style={{ padding: 16 }}>
+      <label className="fld">Tipo</label>
+      <select className="select" style={{ marginBottom: 12 }} value={tipo} onChange={(ev) => setTipo(ev.target.value)}>
+        {ACTA_TYPES.map((t) => <option key={t}>{t}</option>)}
+      </select>
+      <label className="fld">Descripción</label>
+      <textarea className="input" rows={4} style={{ marginBottom: 12, resize: "vertical" }} placeholder="Detalle del incidente…" value={descripcion} onChange={(ev) => setDescripcion(ev.target.value)} />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+        <ActaWitnessPicker staff={staff} exclude={[e.dbId, w2].filter(Boolean)} value={w1} onChange={setW1} label="Testigo 1" />
+        <ActaWitnessPicker staff={staff} exclude={[e.dbId, w1].filter(Boolean)} value={w2} onChange={setW2} label="Testigo 2" />
+      </div>
+      {error && <div style={{ color: "var(--rose)", fontSize: 12, marginBottom: 10 }}>{error}</div>}
+      <div className="row" style={{ gap: 8 }}>
+        <button className="btn btn-accent" style={{ flex: 1, justifyContent: "center" }} disabled={busy} onClick={submit}>
+          {busy ? "Creando…" : "Crear acta y enviar para firma"}
+        </button>
+        <button className="btn" onClick={onCancel}>Cancelar</button>
+      </div>
+    </div>
+  );
+}
+
+function ActaStatusCard({ actaId, token, socket }) {
+  const [detail, setDetail] = useState(null);
+  const [busyRole, setBusyRole] = useState(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
+
+  const reload = useCallback(() => {
+    fetchActa(token, actaId).then(setDetail).catch(() => {});
+  }, [token, actaId]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  // Tiempo real: cuando alguien firma (desde /acta-firma/:token, sin login),
+  // el backend emite 'acta:signed' al room del tenant — refresca la card sin
+  // que RH tenga que recargar la página para ver la ✅.
+  useEffect(() => {
+    if (!socket) return;
+    const onSigned = (payload) => { if (payload.actaId === actaId) reload(); };
+    socket.on("acta:signed", onSigned);
+    return () => socket.off("acta:signed", onSigned);
+  }, [socket, actaId, reload]);
+
+  if (!detail) return <div className="muted" style={{ fontSize: 12.5, padding: 10 }}>Cargando estado de firmas…</div>;
+  const { acta, signatures } = detail;
+  const finalized = acta.status === "Firmada";
+
+  const copyLink = (url) => { navigator.clipboard?.writeText(url); toast("Link de firma copiado"); };
+  const sendWA = async (role) => {
+    setBusyRole(role);
+    try { await notifyActaSigner(token, actaId, role); toast("Enviado por WhatsApp"); }
+    catch (err) { toast(err.message, "no"); }
+    finally { setBusyRole(null); }
+  };
+  const downloadPdf = async () => {
+    setPdfBusy(true);
+    try { const { pdfUrl } = await fetchActaPdf(token, actaId); window.open(pdfUrl, "_blank"); }
+    catch (err) { toast(err.message, "no"); }
+    finally { setPdfBusy(false); }
+  };
+
+  if (finalized) {
+    return (
+      <div className="glass-2" style={{ padding: 16, borderLeft: "3px solid var(--emerald)" }}>
+        <div className="row" style={{ gap: 8 }}><CircleCheck size={16} style={{ color: "var(--emerald)" }} /><span style={{ fontWeight: 600, fontSize: 13.5 }}>Acta FIRMADA · {fmtDateShort(acta.finalized_at)}</span></div>
+        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{signatures.filter((s) => s.signedAt).length}/4 firmas recibidas</div>
+        <div className="mono muted2" style={{ fontSize: 11, marginTop: 6 }}>Hash: {acta.document_hash ? `${acta.document_hash.slice(0, 20)}…` : "—"}</div>
+        <div className="row" style={{ gap: 8, marginTop: 10 }}>
+          <button className="btn btn-sm" onClick={downloadPdf} disabled={pdfBusy}><Download size={12} />{pdfBusy ? "Generando…" : "Descargar PDF legal"}</button>
+          <button className="btn btn-sm" onClick={() => copyLink(`${window.location.origin}/api/actas/verify/${acta.document_hash}`)}><QrCode size={12} />Verificar</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="glass-2" style={{ padding: 16 }}>
+      <div style={{ fontWeight: 600, fontSize: 13.5 }}>Acta {acta.folio} · {acta.type}</div>
+      <div className="muted2" style={{ fontSize: 11, marginBottom: 10 }}>Creada: {fmtDateShort(acta.issue_date)}</div>
+      <div className="muted2" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 6 }}>Firmas pendientes</div>
+      {signatures.map((s) => (
+        <div key={s.role} className="row" style={{ justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
+          <div className="row" style={{ gap: 8 }}>
+            {s.signedAt ? <CircleCheck size={14} style={{ color: "var(--emerald)" }} /> : (s.declined ? <X size={14} style={{ color: "var(--rose)" }} /> : <Square size={14} className="muted2" />)}
+            <span style={{ fontSize: 12.5 }}>{s.name || "—"} <span className="muted2">({s.label})</span></span>
+          </div>
+          <span className="muted2" style={{ fontSize: 11 }}>
+            {s.signedAt ? `firmado ${fmtTime(s.signedAt)}` : (s.declined ? "inconforme" : "pendiente")}
+          </span>
+        </div>
+      ))}
+      <div className="row" style={{ gap: 6, marginTop: 12, flexWrap: "wrap" }}>
+        {signatures.filter((s) => s.signingUrl).map((s) => (
+          <button key={`copy-${s.role}`} className="btn btn-sm" onClick={() => copyLink(s.signingUrl)}><Copy size={11} />Link {s.label}</button>
+        ))}
+        <button className="btn btn-sm" onClick={downloadPdf} disabled={pdfBusy}><Download size={12} />{pdfBusy ? "Generando…" : "Ver PDF"}</button>
+      </div>
+      {signatures.some((s) => s.signingUrl && s.phone) && (
+        <div className="row" style={{ gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+          {signatures.filter((s) => s.signingUrl && s.phone).map((s) => (
+            <button key={`wa-${s.role}`} className="btn btn-sm" disabled={busyRole === s.role} onClick={() => sendWA(s.role)}>
+              <MessageSquare size={11} />{busyRole === s.role ? "Enviando…" : `WhatsApp ${s.label}`}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ActasTab({ e, token, staff, socket }) {
+  const [list, setList] = useState({ status: "loading", data: [] });
+  const [creating, setCreating] = useState(false);
+  const [activeActaId, setActiveActaId] = useState(null);
+
+  const reload = useCallback(() => {
+    fetchActas(token, e.dbId)
+      .then((d) => setList({ status: "ready", data: d.data || [] }))
+      .catch((err) => setList({ status: "error", data: [], error: err.message }));
+  }, [token, e.dbId]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const onCreated = (res) => {
+    setCreating(false);
+    setActiveActaId(res.acta.id);
+    reload();
+    toast(`Acta ${res.acta.folio} creada — enlaces de firma generados`);
+  };
+
+  return (
+    <div>
+      {!creating && <button className="btn btn-accent" style={{ marginBottom: 14 }} onClick={() => setCreating(true)}><Plus size={14} />Nueva acta</button>}
+      {creating && <NuevaActaForm e={e} token={token} staff={staff} onCreated={onCreated} onCancel={() => setCreating(false)} />}
+
+      {activeActaId && <div style={{ marginTop: creating ? 14 : 0, marginBottom: 14 }}><ActaStatusCard actaId={activeActaId} token={token} socket={socket} /></div>}
+
+      {list.status === "ready" && list.data.filter((a) => a.id !== activeActaId).length > 0 && (
+        <div>
+          <div className="muted2" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 8 }}>Historial</div>
+          {list.data.filter((a) => a.id !== activeActaId).map((a) => (
+            <div key={a.id} className="glass-2" style={{ padding: 12, marginBottom: 8, cursor: "pointer" }} onClick={() => setActiveActaId(a.id)}>
+              <div className="row" style={{ justifyContent: "space-between" }}>
+                <span style={{ fontSize: 12.5, fontWeight: 500 }}>{a.folio} · {a.type}</span>
+                <span className="chip" style={{ color: a.status === "Firmada" ? "var(--emerald)" : "var(--amber)" }}>{a.status}</span>
+              </div>
+              <div className="muted2" style={{ fontSize: 10.5, marginTop: 3 }}>{a.signature_count}/4 firmas · {fmtDateShort(a.issue_date)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {list.status === "ready" && list.data.length === 0 && !creating && !activeActaId && (
+        <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>Sin actas registradas para este colaborador.</div>
+      )}
+    </div>
+  );
+}
+
+function ProfileDrawer({ e, onClose, setStatus, update, token, initialTab, staff, socket }) {
   const [tab, setTab] = useState(initialTab || "resumen");
   const health = useEmployeeHealth(token, e.dbId);
   const urgentCount = (health.data?.documentos || []).filter((d) => (d.insights || []).some((i) => i.nivel === "urgente")).length;
@@ -1831,10 +2049,12 @@ function ProfileDrawer({ e, onClose, setStatus, update, token, initialTab }) {
             {urgentCount > 0 && <span className="chip" style={{ color: "#fff", background: "var(--rose)", borderColor: "var(--rose)", padding: "1px 6px", fontSize: 10 }}>{urgentCount}</span>}
           </span>
           <span className={`tabbtn ${tab === "nomina" ? "on" : ""}`} onClick={() => setTab("nomina")}><DollarSign size={12} />Nómina</span>
+          <span className={`tabbtn ${tab === "actas" ? "on" : ""}`} onClick={() => setTab("actas")}><FileSignature size={12} />Actas</span>
         </div>
         {tab === "resumen" && <ResumenTab e={e} setStatus={setStatus} update={update} token={token} />}
         {tab === "salud" && <SaludTab e={e} token={token} health={health} />}
         {tab === "nomina" && <NominaTab e={e} token={token} />}
+        {tab === "actas" && <ActasTab e={e} token={token} staff={staff} socket={socket} />}
       </div></>
   );
 }
@@ -5867,6 +6087,8 @@ export default function App() {
       {expedienteEmp && (
         <ProfileDrawer
           e={expedienteEmp}
+          staff={staff}
+          socket={socket}
           onClose={() => setExpedienteEmp(null)}
           setStatus={async (dbId, status) => {
             try {
