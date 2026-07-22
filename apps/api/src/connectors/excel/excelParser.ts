@@ -49,6 +49,7 @@ export interface ParsedEmployeeRow {
   bank_clabe?:     string
   notes?:          string
   payroll?:        ParsedPayrollFields  // presente solo si la fila trae columnas de nómina
+  customFields?:   Record<string, string> // columnas marcadas "Crear campo personalizado" en el Step 3
 }
 
 export interface RowError {
@@ -83,8 +84,8 @@ export function parseExcelBuffer(buffer: Buffer, filename: string, overrideMap?:
   if (raw.length === 0) return { rows: [], errors: [] }
 
   const headerRow = raw[0] || []
-  const columnMap = mapHeaders(headerRow, overrideMap)
-  if (columnMap.size === 0) {
+  const { fields: columnMap, custom: customColumns } = mapHeaders(headerRow, overrideMap)
+  if (columnMap.size === 0 && customColumns.length === 0) {
     return { rows: [], errors: [{ row: 1, message: `"${filename}": no se reconoció ninguna columna en el encabezado` }] }
   }
 
@@ -103,10 +104,21 @@ export function parseExcelBuffer(buffer: Buffer, filename: string, overrideMap?:
         values[field] = cell
       }
     }
-    if (Object.keys(values).length === 0) continue
+
+    const customFields: Record<string, string> = {}
+    for (const { index: colIndex, label } of customColumns) {
+      const cell = cells[colIndex]
+      if (cell !== undefined && cell !== null && String(cell).trim() !== '') {
+        customFields[label] = String(cell).trim()
+      }
+    }
+
+    if (Object.keys(values).length === 0 && Object.keys(customFields).length === 0) continue
 
     try {
-      rows.push(mapRowValues(values, rowNumber))
+      const row = mapRowValues(values, rowNumber)
+      if (Object.keys(customFields).length > 0) row.customFields = customFields
+      rows.push(row)
     } catch (err: any) {
       errors.push({ row: rowNumber, message: err.message })
     }
@@ -116,10 +128,11 @@ export function parseExcelBuffer(buffer: Buffer, filename: string, overrideMap?:
 }
 
 export interface HeaderMatch {
-  index:      number
-  label:      string
-  field:      CanonicalField | null
-  suggestion: FieldSuggestion | null // solo presente cuando field === null
+  index:       number
+  label:       string
+  field:       CanonicalField | null
+  suggestion:  FieldSuggestion | null // solo presente cuando field === null
+  customLabel: string | null // presente cuando el header viene de un mapeo guardado que lo marcó como campo personalizado
 }
 
 export interface PreviewResult {
@@ -127,6 +140,7 @@ export interface PreviewResult {
   preview: ParsedEmployeeRow[]
   totalRows: number
   errors: RowError[]
+  missingIdentifierCount: number // filas SIN rfc ni employee_code, sobre el archivo COMPLETO — no solo la muestra de `preview` (ver Step 3.5 del wizard: advertencia "N filas sin RFC ni Clave")
 }
 
 /**
@@ -141,29 +155,32 @@ export function previewExcelBuffer(buffer: Buffer, filename: string, maxPreviewR
   try {
     workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true })
   } catch (err: any) {
-    return { headers: [], preview: [], totalRows: 0, errors: [{ row: 0, message: `No se pudo leer "${filename}": ${err.message}` }] }
+    return { headers: [], preview: [], totalRows: 0, errors: [{ row: 0, message: `No se pudo leer "${filename}": ${err.message}` }], missingIdentifierCount: 0 }
   }
 
   const sheetName = workbook.SheetNames[0]
   if (!sheetName) {
-    return { headers: [], preview: [], totalRows: 0, errors: [{ row: 0, message: `"${filename}" no contiene hojas` }] }
+    return { headers: [], preview: [], totalRows: 0, errors: [{ row: 0, message: `"${filename}" no contiene hojas` }], missingIdentifierCount: 0 }
   }
 
   const sheet = workbook.Sheets[sheetName]
   const raw = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: '' })
   const headerRow = raw[0] || []
-  const columnMap = mapHeaders(headerRow, overrideMap)
+  const { fields: columnMap, custom: customColumns } = mapHeaders(headerRow, overrideMap)
+  const customLabelByIndex = new Map(customColumns.map((c) => [c.index, c.label]))
 
   const headers: HeaderMatch[] = headerRow
     .map((h, index) => {
       const label = String(h ?? '').trim()
       const field = columnMap.get(index) ?? null
-      return { index, label, field, suggestion: field ? null : (label ? suggestField(label) : null) }
+      const customLabel = customLabelByIndex.get(index) ?? null
+      return { index, label, field, customLabel, suggestion: (field || customLabel) ? null : (label ? suggestField(label) : null) }
     })
     .filter((h) => h.label !== '')
 
   const { rows, errors } = parseExcelBuffer(buffer, filename, overrideMap)
-  return { headers, preview: rows.slice(0, maxPreviewRows), totalRows: rows.length, errors }
+  const missingIdentifierCount = rows.filter((r) => !r.rfc && !r.employee_code).length
+  return { headers, preview: rows.slice(0, maxPreviewRows), totalRows: rows.length, errors, missingIdentifierCount }
 }
 
 function mapRowValues(values: Partial<Record<CanonicalField, unknown>>, rowNumber: number): ParsedEmployeeRow {

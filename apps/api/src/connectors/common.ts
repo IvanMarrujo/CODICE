@@ -25,6 +25,7 @@ export interface EmployeeUpsertRow {
   bank_name?:     string
   bank_clabe?:    string
   notes?:         string
+  customFields?:  Record<string, string> // ver upsertEmployee: se mergea (no sobreescribe) en employees.custom_fields
 }
 
 export interface PayrollUpsertRow {

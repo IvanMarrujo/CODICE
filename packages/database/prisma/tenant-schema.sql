@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.employees (
   avatar_url        TEXT,
   notes             TEXT,
   raw_source_data   JSONB,                  -- datos originales del conector, para debug
+  custom_fields     JSONB       DEFAULT '{}', -- campos ad-hoc creados en el wizard de conectores (Step 3)
 
   created_at        TIMESTAMPTZ DEFAULT NOW(),
   updated_at        TIMESTAMPTZ DEFAULT NOW(),

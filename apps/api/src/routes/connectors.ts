@@ -183,11 +183,13 @@ router.post('/preview/excel', requireHR, handlePreviewExcelUpload, async (req: R
       try { overrideMap = JSON.parse(req.body.fieldMap) } catch { /* ignorar mapeo malformado */ }
     }
     if (!overrideMap) {
-      const saved = await getSavedFieldMap(req.tenant.id, FIELD_MAP_SOURCE_TYPE)
+      const saved = await getSavedFieldMap(req.tenant.id, resolveSourceType(req.body))
       if (saved) { overrideMap = saved; usingSavedMapping = true }
     }
 
-    const result = previewExcelBuffer(file.buffer, file.originalname, 5, overrideMap)
+    // 10 filas: Step 3.5 (vista previa completa) necesita más que las 5 que
+    // bastaban para el field mapper — ver FEATURE 2 del wizard de conectores.
+    const result = previewExcelBuffer(file.buffer, file.originalname, 10, overrideMap)
     const headers = result.headers.map((h) => ({
       ...h,
       fieldLabel: h.field ? CANONICAL_FIELD_LABELS[h.field] : null,
@@ -195,9 +197,12 @@ router.post('/preview/excel', requireHR, handlePreviewExcelUpload, async (req: R
 
     // El banner de "mapeo guardado" solo tiene sentido si de verdad aplicó a
     // algún header de ESTE archivo — un mapeo guardado de otro layout no cuenta.
-    usingSavedMapping = usingSavedMapping && headers.some((h) => h.field && overrideMap?.[h.label])
+    usingSavedMapping = usingSavedMapping && headers.some((h) => (h.field || h.customLabel) && overrideMap?.[h.label])
 
-    res.json({ fileName: file.originalname, headers, preview: result.preview, totalRows: result.totalRows, errors: result.errors, usingSavedMapping })
+    res.json({
+      fileName: file.originalname, headers, preview: result.preview, totalRows: result.totalRows,
+      errors: result.errors, usingSavedMapping, missingIdentifierCount: result.missingIdentifierCount,
+    })
   } catch (err) {
     next(err)
   }
@@ -253,11 +258,16 @@ export const WRITABLE_EMPLOYEE_COLUMNS: (keyof EmployeeUpsertRow)[] = [
 ]
 
 // ── Mapeo de columnas guardado por tenant + tipo de fuente ──────
-// El tipo de fuente real que produce este flujo hoy es 'EXCEL_GENERIC'
-// (ver runExcelSync) — el ejemplo del feature usaba "NOMIPAQ_EXCEL" mismo
-// que no existe como constante distinta en el código actual; se usa el
-// valor real para que el mapeo guardado efectivamente se reutilice.
+// Default para el flujo real de hoy (ver runExcelSync). El wizard del front
+// manda `sourceType` explícito ('EXCEL' | 'ZOHO' | 'HUBSPOT' | 'ODOO' | ...)
+// para que cada conector tenga su propio mapeo guardado en Redis — ver
+// FEATURE 4 del mapeo inteligente: el mismo wizard/endpoints deben poder
+// reutilizarse para Zoho/HubSpot/Odoo sin que sus mapeos se pisen entre sí.
 const FIELD_MAP_SOURCE_TYPE = 'EXCEL_GENERIC'
+
+function resolveSourceType(body: Request['body']): string {
+  return (typeof body?.sourceType === 'string' && body.sourceType) ? body.sourceType : FIELD_MAP_SOURCE_TYPE
+}
 
 function fieldMapKey(tenantId: string, sourceType: string) {
   return `t:${tenantId}:fieldmap:${sourceType}`
@@ -613,15 +623,16 @@ router.post('/upload/excel', requireHR, handleExcelUpload, async (req: Request, 
     if (typeof req.body.fieldMap === 'string' && req.body.fieldMap) {
       try { fieldMap = JSON.parse(req.body.fieldMap) } catch { /* ignorar mapeo malformado */ }
     }
+    const sourceType = resolveSourceType(req.body)
     if (!fieldMap) {
-      fieldMap = (await getSavedFieldMap(req.tenant.id, FIELD_MAP_SOURCE_TYPE)) || undefined
+      fieldMap = (await getSavedFieldMap(req.tenant.id, sourceType)) || undefined
     }
 
     const result = await runExcelSync(req.tenant.id, req.tenantDb, req.app.get('io'), files, fieldMap)
     await upsertConnectedSource(req.tenantDb, req.tenant.id, 'EXCEL', files)
 
     // PART 4 — guarda el mapeo efectivamente usado para la próxima subida.
-    if (fieldMap) await saveFieldMap(req.tenant.id, FIELD_MAP_SOURCE_TYPE, fieldMap)
+    if (fieldMap) await saveFieldMap(req.tenant.id, sourceType, fieldMap)
 
     res.json({
       processed: result.processed, inserted: result.inserted, updated: result.updated,
@@ -1112,9 +1123,17 @@ export async function upsertEmployee(
     .map(col => [col, row[col]] as const)
     .filter(([, value]) => value !== undefined)
 
+  const hasCustomFields = row.customFields && Object.keys(row.customFields).length > 0
+
   if (existingId) {
     const setFragments = presentFields.map(([col, value]) => Prisma.sql`${Prisma.raw(col)} = ${value}`)
     setFragments.push(Prisma.sql`${Prisma.raw('source')} = ${source}`)
+    // custom_fields se MERGEA, nunca se sobreescribe — una columna de nómina
+    // que solo trae 1 campo personalizado no debe borrar los demás que ya
+    // traía el empleado de una importación anterior (ver PATCH /employees/:id).
+    if (hasCustomFields) {
+      setFragments.push(Prisma.sql`${Prisma.raw('custom_fields')} = COALESCE(${Prisma.raw('custom_fields')}, '{}'::jsonb) || ${JSON.stringify(row.customFields)}::jsonb`)
+    }
 
     await tenantDb.$executeRaw`
       UPDATE employees SET ${Prisma.join(setFragments, ', ')} WHERE id = ${existingId}
@@ -1128,6 +1147,10 @@ export async function upsertEmployee(
 
   const columns = [...presentFields.map(([col]) => col), 'tenant_id', 'source']
   const values: unknown[]  = [...presentFields.map(([, value]) => value), tenantId, source]
+  if (hasCustomFields) {
+    columns.push('custom_fields')
+    values.push(Prisma.sql`${JSON.stringify(row.customFields)}::jsonb`)
+  }
 
   const columnFragment = Prisma.join(columns.map(c => Prisma.raw(c)), ', ')
   const valueFragment  = Prisma.join(values, ', ')

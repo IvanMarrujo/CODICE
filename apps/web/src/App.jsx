@@ -2090,8 +2090,49 @@ const CODICE_PAYROLL_FIELDS = [
   ["period", "Período / quincena"], ["year", "Año"],
 ];
 const PAYROLL_FIELD_KEYS = new Set(CODICE_PAYROLL_FIELDS.map(([f]) => f));
+const FIELD_LABELS = Object.fromEntries([...CODICE_FIELDS, ...CODICE_PAYROLL_FIELDS]);
 
-const MODO_A_STEPS = ["Sistema", "Archivo", "Mapeo", "Vista previa", "Progreso", "Resultado"];
+// Mismo prefijo que CUSTOM_FIELD_PREFIX en apps/api/src/connectors/excel/fieldMapper.ts
+// — el valor tras el prefijo es la etiqueta elegida por el usuario, tal cual
+// se guarda como llave en employees.custom_fields.
+const CUSTOM_FIELD_PREFIX = "__custom__:";
+
+// "Tipo de dato" es puramente cosmético del wizard: el backend siempre
+// guarda el valor como texto en custom_fields (JSONB), sin validar ni
+// coercionar por tipo — no hay soporte de tipos en el schema todavía.
+const CUSTOM_FIELD_TYPES = [
+  { id: "texto", label: "Texto" },
+  { id: "numero", label: "Número" },
+  { id: "fecha", label: "Fecha" },
+  { id: "booleano", label: "Sí / No" },
+];
+
+function isCustomFieldValue(v) { return typeof v === "string" && v.startsWith(CUSTOM_FIELD_PREFIX); }
+function customFieldLabelOf(v) { return v.slice(CUSTOM_FIELD_PREFIX.length); }
+
+// Clasifica un header ya confirmado (mapa manual + auto-detección) en
+// mapeado / campo personalizado / sin mapear — usado por el field mapper,
+// Step 3.5 (vista previa) y Step 4 (confirmación) para que los 3 coincidan
+// siempre en qué cuenta como "mapeado".
+function classifyHeader(h, manualMap) {
+  const override = manualMap[h.index];
+  if (isCustomFieldValue(override)) return { kind: "custom", label: customFieldLabelOf(override) };
+  const field = override || h.field;
+  if (field) return { kind: "mapped", field, label: FIELD_LABELS[field] || field };
+  return { kind: "unmapped" };
+}
+
+// RFC o Clave de empleado mapeado (por auto-detección o a mano) — comparte
+// criterio entre FieldMapperStep (bloquea "Continuar") e ImportConfirmStep
+// (checklist), ver REQUIRED_IDENTIFIER_FIELDS arriba.
+function hasRequiredIdentifier(headers, manualMap) {
+  return headers.some((h) => {
+    const c = classifyHeader(h, manualMap);
+    return c.kind === "mapped" && REQUIRED_IDENTIFIER_FIELDS.includes(c.field);
+  });
+}
+
+const MODO_A_STEPS = ["Sistema", "Archivo", "Mapeo", "Vista previa", "Confirmar", "Progreso", "Resultado"];
 
 function MiniDropzone({ accept, multiple, onFiles, busy, label, busyLabel }) {
   const ref = useRef(null);
@@ -2118,8 +2159,42 @@ function MiniDropzone({ accept, multiple, onFiles, busy, label, busyLabel }) {
   );
 }
 
-function FieldMapperTable({ headers, manualMap, setManualMap }) {
+// Modal "Crear campo personalizado" — Step 3, PART 1.3. `header` es la
+// columna origen (prefill del nombre); onCreate(label, typeId) deja que el
+// caller decida cómo aplicarlo a manualMap/customFieldTypes.
+function CustomFieldModal({ header, onCreate, onCancel }) {
+  const [name, setName] = useState(header.label);
+  const [typeId, setTypeId] = useState("texto");
+  return (
+    <div className="modal" onClick={onCancel}>
+      <div className="glass" style={{ width: "min(380px,92vw)", padding: 22 }} onClick={(e) => e.stopPropagation()}>
+        <div className="row" style={{ gap: 9, marginBottom: 16 }}>
+          <Tag size={16} style={{ color: "var(--violet)" }} />
+          <span style={{ fontWeight: 600, fontSize: 14.5 }}>Crear campo personalizado</span>
+        </div>
+        <label className="muted2" style={{ fontSize: 11 }}>Nombre del campo</label>
+        <input className="input" style={{ width: "100%", margin: "4px 0 14px" }} value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        <label className="muted2" style={{ fontSize: 11 }}>Tipo de dato</label>
+        <select className="select" style={{ width: "100%", margin: "4px 0 18px" }} value={typeId} onChange={(e) => setTypeId(e.target.value)}>
+          {CUSTOM_FIELD_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+        </select>
+        <div className="row" style={{ gap: 10, justifyContent: "flex-end" }}>
+          <button className="btn" onClick={onCancel}>Cancelar</button>
+          <button className="btn btn-accent" disabled={!name.trim()} onClick={() => onCreate(name.trim(), typeId)}>Crear y mapear</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FieldMapperTable({ headers, manualMap, setManualMap, customFieldTypes, setCustomFieldTypes }) {
+  const [creatingFor, setCreatingFor] = useState(null); // header (o null) con el modal de campo personalizado abierto
   const applySuggestion = (h) => setManualMap((m) => ({ ...m, [h.index]: h.suggestion.field }));
+  const createCustomField = (h, label, typeId) => {
+    setManualMap((m) => ({ ...m, [h.index]: `${CUSTOM_FIELD_PREFIX}${label}` }));
+    setCustomFieldTypes((t) => ({ ...t, [h.index]: typeId }));
+    setCreatingFor(null);
+  };
   return (
     <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
       <table className="tbl">
@@ -2128,25 +2203,34 @@ function FieldMapperTable({ headers, manualMap, setManualMap }) {
           {headers.map((h) => {
             const matched = !!h.field;
             const overridden = manualMap[h.index];
+            const isCustom = isCustomFieldValue(overridden);
+            const customLabel = isCustom ? customFieldLabelOf(overridden) : "";
             const suggestion = !matched && !overridden ? h.suggestion : null;
             return (
               <tr key={h.index} style={{ cursor: "default" }}>
                 <td className="mono">{h.label}</td>
                 <td>
-                  {matched ? h.fieldLabel : (
+                  {matched ? h.fieldLabel : isCustom ? (
+                    <button className="btn btn-sm" style={{ padding: "2px 8px", fontSize: 11 }} onClick={() => setCreatingFor({ ...h, label: customLabel })}>Cambiar</button>
+                  ) : (
                     <div>
                       <select
                         className="select" style={{ fontSize: 12, padding: "5px 8px", width: 200 }}
-                        value={overridden || ""} onChange={(e) => setManualMap((m) => ({ ...m, [h.index]: e.target.value }))}
+                        value={overridden || ""}
+                        onChange={(e) => {
+                          if (e.target.value === "__create_custom__") { setCreatingFor(h); return; }
+                          setManualMap((m) => ({ ...m, [h.index]: e.target.value }));
+                        }}
                       >
                         <option value="">Sin mapear (se ignora)</option>
                         <optgroup label="Empleados">{CODICE_FIELDS.map(([f, l]) => <option key={f} value={f}>{l}</option>)}</optgroup>
                         <optgroup label="Nómina">{CODICE_PAYROLL_FIELDS.map(([f, l]) => <option key={f} value={f}>{l}</option>)}</optgroup>
+                        <option value="__create_custom__">+ Crear campo personalizado</option>
                       </select>
                       {suggestion && (
                         <div className="row" style={{ gap: 7, marginTop: 6 }}>
                           <span className="muted2" style={{ fontSize: 11 }}>Sugerido: {suggestion.label}</span>
-                          <button className="btn btn-sm" style={{ padding: "2px 8px", fontSize: 11 }} onClick={() => applySuggestion(h)}>Aplicar sugerencia</button>
+                          <button className="btn btn-sm" style={{ padding: "2px 8px", fontSize: 11 }} onClick={() => applySuggestion(h)}>Aplicar</button>
                         </div>
                       )}
                     </div>
@@ -2155,20 +2239,29 @@ function FieldMapperTable({ headers, manualMap, setManualMap }) {
                 <td>
                   {matched
                     ? <span className="chip" style={{ color: "var(--emerald)" }}><CircleCheck size={11} />Detectado</span>
-                    : overridden
-                      ? <span className="chip" style={{ color: "var(--emerald)" }}><CircleCheck size={11} />Mapeado manualmente</span>
-                      : <span className="chip" style={{ color: "var(--amber)" }}><AlertTriangle size={11} />{suggestion ? "Sugerencia disponible" : "Sin mapear"}</span>}
+                    : isCustom
+                      ? <span className="chip" style={{ color: "var(--violet)" }}><Tag size={11} />Campo personalizado · {customLabel}</span>
+                      : overridden
+                        ? <span className="chip" style={{ color: "var(--emerald)" }}><CircleCheck size={11} />Mapeado manualmente</span>
+                        : <span className="chip" style={{ color: "var(--amber)" }}><AlertTriangle size={11} />{suggestion ? "Sugerencia disponible" : "Sin mapear"}</span>}
                 </td>
               </tr>
             );
           })}
         </tbody>
       </table>
+      {creatingFor && (
+        <CustomFieldModal
+          header={creatingFor}
+          onCreate={(label, typeId) => createCustomField(creatingFor, label, typeId)}
+          onCancel={() => setCreatingFor(null)}
+        />
+      )}
     </div>
   );
 }
 
-function FieldMapperStep({ preview, manualMap, setManualMap, onContinue, onBack }) {
+function FieldMapperStep({ preview, manualMap, setManualMap, customFieldTypes, setCustomFieldTypes, onContinue, onBack }) {
   // Categoriza cada header por el campo YA detectado o el que el usuario
   // mapeó manualmente — así una columna reasignada a mano cambia de sección.
   const fieldFor = (h) => manualMap[h.index] || h.field;
@@ -2189,7 +2282,7 @@ function FieldMapperStep({ preview, manualMap, setManualMap, onContinue, onBack 
     });
   };
 
-  const hasRequiredIdentifier = preview.headers.some((h) => REQUIRED_IDENTIFIER_FIELDS.includes(fieldFor(h)));
+  const identifierMapped = hasRequiredIdentifier(preview.headers, manualMap);
 
   return (
     <div>
@@ -2220,33 +2313,36 @@ function FieldMapperStep({ preview, manualMap, setManualMap, onContinue, onBack 
 
       <Eyebrow>Empleados</Eyebrow>
       <div style={{ marginTop: 8, marginBottom: payrollHeaders.length ? 22 : 0 }}>
-        <FieldMapperTable headers={employeeHeaders} manualMap={manualMap} setManualMap={setManualMap} />
+        <FieldMapperTable headers={employeeHeaders} manualMap={manualMap} setManualMap={setManualMap} customFieldTypes={customFieldTypes} setCustomFieldTypes={setCustomFieldTypes} />
       </div>
 
       {payrollHeaders.length > 0 && (
         <>
           <Eyebrow>Nómina</Eyebrow>
           <div style={{ marginTop: 8 }}>
-            <FieldMapperTable headers={payrollHeaders} manualMap={manualMap} setManualMap={setManualMap} />
+            <FieldMapperTable headers={payrollHeaders} manualMap={manualMap} setManualMap={setManualMap} customFieldTypes={customFieldTypes} setCustomFieldTypes={setCustomFieldTypes} />
           </div>
         </>
       )}
 
       <div className="muted2" style={{ fontSize: 11, marginTop: 10 }}>Las columnas sin mapear se ignoran al importar.</div>
-      {!hasRequiredIdentifier && (
+      {!identifierMapped && (
         <div style={{ fontSize: 12, color: "var(--rose)", marginTop: 10 }}>
-          Necesitas mapear al menos RFC o Clave de empleado para continuar
+          ⚠️ Se requiere RFC o Clave de empleado
         </div>
       )}
       <div className="row" style={{ gap: 10, marginTop: 20, justifyContent: "flex-end" }}>
         <button className="btn" onClick={onBack}>← Atrás</button>
-        <button className="btn btn-accent" disabled={!hasRequiredIdentifier} onClick={onContinue}>Continuar</button>
+        <button className="btn btn-accent" disabled={!identifierMapped} onClick={onContinue}>Continuar</button>
       </div>
     </div>
   );
 }
 
-function PreviewStep({ isExcel, preview, onConfirm, onBack }) {
+// CFDI no pasa por el field mapper (es XML timbrado, sin columnas que
+// decidir) — conserva el preview simple de 4 columnas + confirmar directo,
+// sin Step 3.5/4 (esos dependen de `preview.headers`, que CFDI no produce).
+function CfdiPreviewStep({ preview, onConfirm, onBack }) {
   const rows = preview.preview || [];
   return (
     <div>
@@ -2262,19 +2358,10 @@ function PreviewStep({ isExcel, preview, onConfirm, onBack }) {
       )}
       <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
         <table className="tbl">
-          <thead>
-            {isExcel
-              ? <tr><th>Nombre</th><th>Departamento</th><th>Puesto</th><th>Salario diario</th></tr>
-              : <tr><th>Nombre</th><th>RFC</th><th>Percepciones</th><th>Neto</th></tr>}
-          </thead>
+          <thead><tr><th>Nombre</th><th>RFC</th><th>Percepciones</th><th>Neto</th></tr></thead>
           <tbody>
             {rows.length === 0 && <tr style={{ cursor: "default" }}><td colSpan={4} className="muted" style={{ padding: 16 }}>Sin filas para mostrar.</td></tr>}
-            {rows.map((r, i) => isExcel ? (
-              <tr key={i} style={{ cursor: "default" }}>
-                <td>{r.first_name} {r.last_name}</td><td className="muted">{r.department || "—"}</td><td className="muted">{r.position || "—"}</td>
-                <td className="mono">{r.daily_salary ? mxn2(r.daily_salary) : "—"}</td>
-              </tr>
-            ) : (
+            {rows.map((r, i) => (
               <tr key={i} style={{ cursor: "default" }}>
                 <td>{r.employee.first_name} {r.employee.last_name}</td><td className="mono muted2">{r.employee.rfc || "—"}</td>
                 <td className="mono">{mxn2(r.payroll.total_income || 0)}</td>
@@ -2288,6 +2375,211 @@ function PreviewStep({ isExcel, preview, onConfirm, onBack }) {
       <div className="row" style={{ gap: 10, marginTop: 12, justifyContent: "flex-end" }}>
         <button className="btn" onClick={onBack}>Cancelar</button>
         <button className="btn btn-accent" onClick={onConfirm}>Confirmar e importar</button>
+      </div>
+    </div>
+  );
+}
+
+function formatCellValue(v) {
+  if (v == null || v === "") return "—";
+  if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v)) return v.slice(0, 10);
+  return String(v);
+}
+
+// Valor a mostrar para una celda de la vista previa completa (Step 3.5) —
+// columnas de nómina viven en row.payroll (ver ParsedPayrollFields en
+// excelParser.ts), personalizadas en row.customFields, y las sin mapear no
+// tienen valor disponible del lado del cliente (el parser descarta la celda
+// cruda de columnas no reconocidas — ver previewExcelBuffer en el API).
+function previewCellValue(row, h, manualMap) {
+  const c = classifyHeader(h, manualMap);
+  if (c.kind === "unmapped") return null;
+  if (c.kind === "custom") return row.customFields?.[c.label] ?? null;
+  if (PAYROLL_FIELD_KEYS.has(c.field)) {
+    if (c.field === "period" || c.field === "year") return row.payroll?.period_label ?? null;
+    return row.payroll?.[c.field] ?? null;
+  }
+  return row[c.field] ?? null;
+}
+
+const HEADER_KIND_STYLE = {
+  mapped:   { color: "var(--cyan)", tag: (c) => c.label },
+  custom:   { color: "var(--violet)", tag: () => "Campo personalizado" },
+  unmapped: { color: "var(--muted-2)", tag: () => "Se ignorará" },
+};
+
+function DataPreviewTable({ preview, manualMap }) {
+  const rows = preview.preview || [];
+  return (
+    <div className="glass" style={{ padding: 0, overflowX: "auto" }}>
+      <table className="tbl">
+        <thead>
+          <tr>
+            {preview.headers.map((h) => {
+              const c = classifyHeader(h, manualMap);
+              const style = HEADER_KIND_STYLE[c.kind];
+              return (
+                <th key={h.index} style={{ whiteSpace: "nowrap" }}>
+                  <div className="mono" style={{ fontSize: 12 }}>{h.label}</div>
+                  <div style={{ fontSize: 10, marginTop: 2, fontWeight: 400, color: style.color }}>{style.tag(c)}</div>
+                </th>
+              );
+            })}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 && <tr style={{ cursor: "default" }}><td colSpan={preview.headers.length || 1} className="muted" style={{ padding: 16 }}>Sin filas para mostrar.</td></tr>}
+          {rows.map((r, i) => (
+            <tr key={i} style={{ cursor: "default" }}>
+              {preview.headers.map((h) => (
+                <td key={h.index} className="mono" style={{ whiteSpace: "nowrap" }}>{formatCellValue(previewCellValue(r, h, manualMap))}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+const PREVIEW_CARDS_PER_PAGE = 5;
+
+function DataPreviewList({ preview, manualMap }) {
+  const rows = preview.preview || [];
+  const [page, setPage] = useState(0);
+  const totalPages = Math.max(1, Math.ceil(rows.length / PREVIEW_CARDS_PER_PAGE));
+  const pageRows = rows.slice(page * PREVIEW_CARDS_PER_PAGE, page * PREVIEW_CARDS_PER_PAGE + PREVIEW_CARDS_PER_PAGE);
+  return (
+    <div>
+      {pageRows.length === 0 && <div className="muted" style={{ padding: 16 }}>Sin filas para mostrar.</div>}
+      {pageRows.map((r, i) => {
+        const fields = preview.headers
+          .map((h) => ({ c: classifyHeader(h, manualMap), value: previewCellValue(r, h, manualMap) }))
+          .filter((f) => f.c.kind !== "unmapped" && f.value != null);
+        return (
+          <div key={i} className="glass-2" style={{ padding: 14, marginBottom: 10 }}>
+            <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: 9 }}>{r.first_name} {r.last_name}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 9 }}>
+              {fields.map((f, j) => (
+                <div key={j}>
+                  <div className="muted2" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".05em" }}>{f.c.label}</div>
+                  <div style={{ fontSize: 12.5, marginTop: 2 }}>{formatCellValue(f.value)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+      {rows.length > PREVIEW_CARDS_PER_PAGE && (
+        <div className="row" style={{ gap: 10, justifyContent: "center", marginTop: 6 }}>
+          <button className="btn btn-sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)}><ChevronLeft size={13} />Anterior</button>
+          <span className="muted2" style={{ fontSize: 11.5, alignSelf: "center" }}>{page + 1} / {totalPages}</span>
+          <button className="btn btn-sm" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>Siguiente<ChevronRight size={13} /></button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Step 3.5 — "Vista previa de tus datos": vista completa (TODAS las
+// columnas, no solo las 4 de siempre) antes de importar, con toggle
+// tabla/lista — ver FEATURE 2 del mapeo inteligente.
+function DataPreviewStep({ preview, manualMap, view, setView, onContinue, onBack }) {
+  const mappedCount = preview.headers.filter((h) => classifyHeader(h, manualMap).kind === "mapped").length;
+  const customCount = preview.headers.filter((h) => classifyHeader(h, manualMap).kind === "custom").length;
+  const ignoredCount = preview.headers.length - mappedCount - customCount;
+
+  const warnings = [];
+  for (const e of preview.errors || []) warnings.push(`${e.row ? `Fila ${e.row}: ` : ""}${e.message}`);
+  if (preview.missingIdentifierCount > 0) {
+    warnings.push(`${preview.missingIdentifierCount} fila${preview.missingIdentifierCount === 1 ? "" : "s"} sin RFC ni Clave — ${preview.missingIdentifierCount === 1 ? "será ignorada" : "serán ignoradas"}`);
+  }
+
+  return (
+    <div>
+      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Vista previa de tus datos</div>
+      <div className="muted" style={{ fontSize: 12.5, marginBottom: 14 }}>Así se verán tus datos en CÓDICE — revisa antes de continuar.</div>
+
+      <div className="row" style={{ gap: 6, marginBottom: 14 }}>
+        <button className={`btn btn-sm ${view === "table" ? "btn-accent" : ""}`} onClick={() => setView("table")}>Tabla</button>
+        <button className={`btn btn-sm ${view === "list" ? "btn-accent" : ""}`} onClick={() => setView("list")}>Lista</button>
+      </div>
+
+      {view === "table"
+        ? <DataPreviewTable preview={preview} manualMap={manualMap} />
+        : <DataPreviewList preview={preview} manualMap={manualMap} />}
+
+      <div style={{ fontSize: 12.5, marginTop: 14 }}>
+        Se importarán <b>{preview.totalRows}</b> empleado{preview.totalRows === 1 ? "" : "s"} · <b>{mappedCount + customCount}</b> campo{(mappedCount + customCount) === 1 ? "" : "s"} mapeado{(mappedCount + customCount) === 1 ? "" : "s"} · <b>{ignoredCount}</b> campo{ignoredCount === 1 ? "" : "s"} ignorado{ignoredCount === 1 ? "" : "s"}
+      </div>
+
+      {warnings.length > 0 && (
+        <div className="warnbox" style={{ marginTop: 12 }}>
+          {warnings.slice(0, 8).map((w, i) => (
+            <div key={i} className="row" style={{ gap: 7, marginBottom: i < warnings.length - 1 ? 5 : 0 }}>
+              <AlertTriangle size={13} style={{ color: "var(--amber)", flexShrink: 0 }} />
+              <span style={{ fontSize: 12 }}>{w}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="row" style={{ gap: 10, marginTop: 20, justifyContent: "flex-end" }}>
+        <button className="btn" onClick={onBack}>← Atrás</button>
+        <button className="btn btn-accent" onClick={onContinue}>Continuar</button>
+      </div>
+    </div>
+  );
+}
+
+function ChecklistRow({ ok, children }) {
+  return (
+    <div className="row" style={{ gap: 8, marginBottom: 8 }}>
+      {ok ? <CircleCheck size={15} style={{ color: "var(--emerald)", flexShrink: 0 }} /> : <AlertTriangle size={15} style={{ color: "var(--amber)", flexShrink: 0 }} />}
+      <span style={{ fontSize: 13 }}>{children}</span>
+    </div>
+  );
+}
+
+// Step 4 — "¿Estás listo para importar?": confirmación final antes de
+// escribir en DB, con checklist + advertencia si el tenant ya tiene
+// empleados (el import actualiza existentes, ver upsertEmployee en
+// routes/connectors.ts) — ver FEATURE 3 del mapeo inteligente.
+function ImportConfirmStep({ preview, manualMap, employeeCount, onConfirm, onBack }) {
+  const identifierMapped = hasRequiredIdentifier(preview.headers, manualMap);
+  const empMapped = preview.headers.filter((h) => { const c = classifyHeader(h, manualMap); return c.kind === "mapped" && !PAYROLL_FIELD_KEYS.has(c.field); }).length;
+  const payrollMapped = preview.headers.filter((h) => { const c = classifyHeader(h, manualMap); return c.kind === "mapped" && PAYROLL_FIELD_KEYS.has(c.field); }).length;
+  const customMapped = preview.headers.filter((h) => classifyHeader(h, manualMap).kind === "custom").length;
+
+  return (
+    <div>
+      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>¿Estás listo para importar?</div>
+      <div className="muted" style={{ fontSize: 12.5, marginBottom: 16 }}>Revisa el resumen antes de escribir los cambios en CÓDICE.</div>
+
+      <div className="glass-2" style={{ padding: 14, marginBottom: 16 }}>
+        <ChecklistRow ok>{preview.totalRows} empleado{preview.totalRows === 1 ? "" : "s"} detectado{preview.totalRows === 1 ? "" : "s"}</ChecklistRow>
+        <ChecklistRow ok={identifierMapped}>{identifierMapped ? "RFC o Clave de empleado mapeado (identificador principal)" : "RFC o Clave de empleado NO mapeado"}</ChecklistRow>
+        <ChecklistRow ok={empMapped > 0}>{empMapped} campo{empMapped === 1 ? "" : "s"} de empleado mapeado{empMapped === 1 ? "" : "s"}</ChecklistRow>
+        <ChecklistRow ok={payrollMapped > 0}>{payrollMapped > 0 ? `Nómina: ${payrollMapped} campo${payrollMapped === 1 ? "" : "s"} mapeado${payrollMapped === 1 ? "" : "s"}` : "Nómina: no detectada"}</ChecklistRow>
+        <ChecklistRow ok>Campos personalizados: {customMapped} creado{customMapped === 1 ? "" : "s"}</ChecklistRow>
+      </div>
+
+      {employeeCount > 0 && (
+        <div className="warnbox" style={{ marginBottom: 16 }}>
+          <div className="row" style={{ gap: 9 }}>
+            <AlertTriangle size={15} style={{ color: "var(--amber)", flexShrink: 0, marginTop: 1 }} />
+            <span style={{ fontSize: 12.5, lineHeight: 1.55 }}>
+              ⚠️ Ya tienes {employeeCount} empleados en el sistema. Esta importación actualizará los registros existentes
+              y agregará los nuevos. No se eliminarán registros. Esta importación actualizará los registros existentes
+              con los datos del archivo. Los campos personalizados que hayas creado se conservarán y enriquecerán.
+            </span>
+          </div>
+        </div>
+      )}
+
+      <div className="row" style={{ gap: 10, justifyContent: "flex-end" }}>
+        <button className="btn" onClick={onBack}>← Revisar mapeo</button>
+        <button className="btn btn-accent" onClick={onConfirm}>✅ Confirmar e importar</button>
       </div>
     </div>
   );
@@ -2351,12 +2643,21 @@ function ResultStep({ result, err, isExcel, onClose }) {
   );
 }
 
-function ModoAWizard({ token, socket, onClose, onImported }) {
-  const [step, setStep] = useState(0);
+// `sourceType`: 'EXCEL' | 'ZOHO' | 'HUBSPOT' | 'ODOO' | 'DBF' | 'CFDI' — hoy
+// solo EXCEL/CFDI tienen conector real (ver FEATURE 4 del mapeo
+// inteligente); Zoho/HubSpot/Odoo son gancho para cuando existan, todavía
+// sin backend — este wizard no intenta llamarlos. `externalData` es el
+// punto de enganche: cuando un futuro conector ya trae headers/preview
+// propios (sin upload de archivo), se pasan aquí y el wizard salta
+// directo a Mapeo (Step 2) igual que Excel/CFDI saltan Sistema/Archivo.
+function ModoAWizard({ token, socket, onClose, onImported, sourceType = "EXCEL", externalData }) {
+  const [step, setStep] = useState(externalData ? 2 : 0);
   const [system, setSystem] = useState(null);
   const [files, setFiles] = useState([]);
   const [manualMap, setManualMap] = useState({});
-  const [preview, setPreview] = useState(null);
+  const [customFieldTypes, setCustomFieldTypes] = useState({});
+  const [previewView, setPreviewView] = useState("table");
+  const [preview, setPreview] = useState(externalData || null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewErr, setPreviewErr] = useState(null);
   const [progress, setProgress] = useState({ processed: 0, total: 0 });
@@ -2364,9 +2665,18 @@ function ModoAWizard({ token, socket, onClose, onImported }) {
   const [commitErr, setCommitErr] = useState(null);
 
   const isExcel = system?.format !== "cfdi";
+  // 'EXCEL' -> 'EXCEL_GENERIC': el flujo de hoy ya guarda su mapeo en Redis
+  // bajo esa llave (ver FIELD_MAP_SOURCE_TYPE en routes/connectors.ts) —
+  // mandar 'EXCEL' tal cual rompería la continuidad del mapeo guardado de
+  // tenants que ya lo usan. El valor 'EXCEL' del prop queda reservado para
+  // un futuro punto de entrada distinto al wizard de Modo A de hoy.
+  const backendSourceType = sourceType === "EXCEL" ? "EXCEL_GENERIC" : sourceType;
+
+  const syncLog = useSyncLog(token);
+  const employeeCount = syncLog.data?.employeeCount ?? 0;
 
   useEffect(() => {
-    if (!socket || step !== 4) return;
+    if (!socket || step !== 5) return;
     const handler = (data) => setProgress(data);
     socket.on("sync:progress", handler);
     return () => socket.off("sync:progress", handler);
@@ -2381,7 +2691,9 @@ function ModoAWizard({ token, socket, onClose, onImported }) {
     setPreviewBusy(true);
     setPreviewErr(null);
     try {
-      const res = system.format === "cfdi" ? await previewCfdi(token, list) : await previewExcel(token, list[0]);
+      const res = system.format === "cfdi"
+        ? await previewCfdi(token, list)
+        : await previewExcel(token, list[0], { sourceType: backendSourceType });
       setPreview(res);
       setStep(system.format === "cfdi" ? 3 : 2);
     } catch (e) {
@@ -2392,11 +2704,11 @@ function ModoAWizard({ token, socket, onClose, onImported }) {
   };
 
   const confirmImport = async () => {
-    setStep(4);
+    setStep(5);
     setProgress({ processed: 0, total: preview?.totalRows || files.length });
     setCommitErr(null);
     try {
-      const endpoint = system.format === "cfdi" ? "/api/connectors/upload/cfdi" : "/api/connectors/upload/excel";
+      const endpoint = system?.format === "cfdi" ? "/api/connectors/upload/cfdi" : "/api/connectors/upload/excel";
       // Mapeo COMPLETO confirmado en el Step 3 (auto-detectado + sugerencias
       // aplicadas + overrides manuales), por header de texto — el backend lo
       // usa tal cual para el import real y lo guarda para la próxima subida
@@ -2408,15 +2720,16 @@ function ModoAWizard({ token, socket, onClose, onImported }) {
           const field = manualMap[h.index] || h.field;
           if (field) fieldMap[h.label] = field;
         }
-        if (Object.keys(fieldMap).length > 0) extraFields = { fieldMap: JSON.stringify(fieldMap) };
+        extraFields = { sourceType: backendSourceType };
+        if (Object.keys(fieldMap).length > 0) extraFields.fieldMap = JSON.stringify(fieldMap);
       }
       const res = await uploadConnectorFile(token, endpoint, files, undefined, extraFields);
       setResult(res);
-      setStep(5);
+      setStep(6);
       onImported?.();
     } catch (e) {
       setCommitErr(e.message);
-      setStep(5);
+      setStep(6);
     }
   };
 
@@ -2447,13 +2760,21 @@ function ModoAWizard({ token, socket, onClose, onImported }) {
         </div>
       )}
       {step === 2 && preview && (
-        <FieldMapperStep preview={preview} manualMap={manualMap} setManualMap={setManualMap} onContinue={() => setStep(3)} onBack={() => setStep(1)} />
+        <FieldMapperStep
+          preview={preview} manualMap={manualMap} setManualMap={setManualMap}
+          customFieldTypes={customFieldTypes} setCustomFieldTypes={setCustomFieldTypes}
+          onContinue={() => setStep(3)} onBack={() => setStep(1)}
+        />
       )}
-      {step === 3 && preview && (
-        <PreviewStep isExcel={isExcel} preview={preview} onConfirm={confirmImport} onBack={() => setStep(isExcel ? 2 : 1)} />
+      {step === 3 && preview && (isExcel
+        ? <DataPreviewStep preview={preview} manualMap={manualMap} view={previewView} setView={setPreviewView} onContinue={() => setStep(4)} onBack={() => setStep(2)} />
+        : <CfdiPreviewStep preview={preview} onConfirm={confirmImport} onBack={() => setStep(1)} />
       )}
-      {step === 4 && <ProgressStep progress={progress} systemLabel={system?.label} />}
-      {step === 5 && <ResultStep result={result} err={commitErr} isExcel={isExcel} onClose={onClose} />}
+      {step === 4 && preview && (
+        <ImportConfirmStep preview={preview} manualMap={manualMap} employeeCount={employeeCount} onConfirm={confirmImport} onBack={() => setStep(2)} />
+      )}
+      {step === 5 && <ProgressStep progress={progress} systemLabel={system?.label} />}
+      {step === 6 && <ResultStep result={result} err={commitErr} isExcel={isExcel} onClose={onClose} />}
     </ConfigPanel>
   );
 }

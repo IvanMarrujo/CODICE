@@ -241,19 +241,41 @@ for (const field of Object.keys(ALIASES) as CanonicalField[]) {
   }
 }
 
+// Sentinel usado por el wizard (Step 3, "Crear campo personalizado") para
+// marcar una columna como destino de un campo ad-hoc en lugar de un
+// CanonicalField fijo — ej. overrideMap["Supervisor Directo"] =
+// "__custom__:Supervisor Directo". El valor tras el prefijo es la etiqueta
+// que el usuario eligió, y se guarda tal cual como llave en
+// employees.custom_fields (ver CustomFieldMatch más abajo y mapRowValues en
+// excelParser.ts). Mismo prefijo que CUSTOM_FIELD_PREFIX en App.jsx.
+export const CUSTOM_FIELD_PREFIX = '__custom__:'
+
+export interface CustomFieldMatch {
+  index: number
+  label: string // etiqueta elegida por el usuario para employees.custom_fields
+}
+
+export interface HeaderMapResult {
+  fields: Map<number, CanonicalField>
+  custom: CustomFieldMatch[]
+}
+
 /**
- * Mapea la fila de headers de una hoja a los campos canónicos reconocidos.
- * Devuelve columnIndex -> CanonicalField. Headers no reconocidos se ignoran.
- * Si un campo ya fue mapeado por un header anterior, los siguientes se ignoran.
+ * Mapea la fila de headers de una hoja a los campos canónicos reconocidos
+ * (+ columnas marcadas como campo personalizado). Headers no reconocidos se
+ * ignoran. Si un campo ya fue mapeado por un header anterior, los siguientes
+ * se ignoran.
  *
- * `overrideMap` (opcional): header de texto exacto -> CanonicalField (o ''
- * para forzar "sin mapear"), capturado en el wizard del Step 3 — tiene
- * prioridad sobre la auto-detección por alias. Ver PART 1/4 del feature de
- * mapeo inteligente: sin esto, lo que el usuario confirma en el mapper
- * nunca llegaba a afectar la importación real (solo la vista previa).
+ * `overrideMap` (opcional): header de texto exacto -> CanonicalField, ''
+ * (forzar "sin mapear") o `__custom__:{label}` (campo personalizado),
+ * capturado en el wizard del Step 3 — tiene prioridad sobre la
+ * auto-detección por alias. Ver PART 1/4 del feature de mapeo inteligente:
+ * sin esto, lo que el usuario confirma en el mapper nunca llegaba a afectar
+ * la importación real (solo la vista previa).
  */
-export function mapHeaders(headers: unknown[], overrideMap?: Record<string, string>): Map<number, CanonicalField> {
-  const columnMap = new Map<number, CanonicalField>()
+export function mapHeaders(headers: unknown[], overrideMap?: Record<string, string>): HeaderMapResult {
+  const fields = new Map<number, CanonicalField>()
+  const custom: CustomFieldMatch[] = []
   const seen = new Set<CanonicalField>()
 
   headers.forEach((header, index) => {
@@ -262,8 +284,13 @@ export function mapHeaders(headers: unknown[], overrideMap?: Record<string, stri
 
     const override = overrideMap?.[label]
     if (override !== undefined) {
+      if (override.startsWith(CUSTOM_FIELD_PREFIX)) {
+        const customLabel = override.slice(CUSTOM_FIELD_PREFIX.length).trim()
+        if (customLabel) custom.push({ index, label: customLabel })
+        return
+      }
       if (override && !seen.has(override as CanonicalField)) {
-        columnMap.set(index, override as CanonicalField)
+        fields.set(index, override as CanonicalField)
         seen.add(override as CanonicalField)
       }
       return // override presente (incluso si es '' = forzado sin mapear): no cae a auto-detección
@@ -271,12 +298,12 @@ export function mapHeaders(headers: unknown[], overrideMap?: Record<string, stri
 
     const field = ALIAS_LOOKUP.get(normalize(label))
     if (field && !seen.has(field)) {
-      columnMap.set(index, field)
+      fields.set(index, field)
       seen.add(field)
     }
   })
 
-  return columnMap
+  return { fields, custom }
 }
 
 // ── Sugerencias por similitud (Tier 2) ──────────────────────────
