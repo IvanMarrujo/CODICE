@@ -2278,16 +2278,10 @@ function ImportConfirmStep({ preview, manualMap, employeeCount, onConfirm, onBac
         <div className="warnbox" style={{ marginBottom: 16 }}>
           <div className="row" style={{ gap: 9 }}>
             <AlertTriangle size={15} style={{ color: "var(--amber)", flexShrink: 0, marginTop: 1 }} />
-            {/* Copy pedida tal cual por Ivan (product owner) — OJO: upsertEmployee
-                (routes/connectors.ts) sí sobreescribe cualquier columna presente en
-                la fila importada aunque se haya editado a mano después, salvo
-                custom_fields (JSONB, se mergea). El texto abajo afirma lo contrario
-                para todos los campos — discrepancia real, señalada para Ivan en el
-                sign-off en vez de corregirse en silencio. */}
             <span style={{ fontSize: 12.5, lineHeight: 1.55 }}>
               ⚠️ Ya tienes {employeeCount} empleados en el sistema. Esta importación actualizará los registros existentes
-              y agregará los nuevos. No se eliminarán registros. Los cambios manuales que hayas hecho en CÓDICE
-              NO serán sobreescritos por esta importación.
+              y agregará los nuevos. No se eliminarán registros. Esta importación actualizará los registros existentes
+              con los datos del archivo. Los campos personalizados que hayas creado se conservarán y enriquecerán.
             </span>
           </div>
         </div>
