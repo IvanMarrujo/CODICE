@@ -600,3 +600,35 @@ export function fetchCourses(token) {
 export function assignCourseBulk(token, courseId, employeeIds) {
   return authedFetchJSON(token, `/api/courses/${courseId}/assign-bulk`, "POST", { employeeIds });
 }
+
+// ── Monday.com — conector "vivo" (sin archivo, API en cada sync) ────
+
+// Paso 1 del modal de conexión: valida el token y lista boards para el selector.
+export function mondayBoards(token, apiToken) {
+  return authedFetchJSON(token, `/api/connectors/monday/boards`, "POST", { apiToken });
+}
+
+// Paso 2: token + board elegido — guarda credenciales y confirma la conexión.
+export function mondayConnect(token, payload) {
+  return authedFetchJSON(token, `/api/connectors/monday/connect`, "POST", payload);
+}
+
+export function mondayStatus(token) {
+  return authedFetch(token, `/api/connectors/monday/status`);
+}
+
+// Dry-run: trae TODOS los items del board ya mapeados (smart matching por
+// título de columna) — misma forma que previewExcel para reusar el wizard
+// (Mapeo/Vista previa/Confirmar) vía sourceType="MONDAY"/externalData.
+export function mondayPreview(token) {
+  return authedFetch(token, `/api/connectors/monday/preview`);
+}
+
+// Encola el sync real (BullMQ) — el resultado llega por Socket.io.
+export function mondaySync(token) {
+  return authedFetchJSON(token, `/api/connectors/monday/sync`, "POST");
+}
+
+export function mondayDisconnect(token) {
+  return authedFetchJSON(token, `/api/connectors/monday/disconnect`, "DELETE");
+}
