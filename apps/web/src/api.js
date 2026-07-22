@@ -528,6 +528,7 @@ export function mapEmployee(row) {
     id: row.employee_code || row.id,
     dbId: row.id, // uuid real — requerido por /api/payroll?employeeId=
     nombre: row.full_name,
+    rfc: row.rfc,
     depto: row.department,
     puesto: row.position,
     status: row.status,
@@ -538,5 +539,38 @@ export function mapEmployee(row) {
     antiguedad: row.hire_date ? yearsSince(row.hire_date) : 0,
     salario: Number(row.monthly_salary ?? 0),
     email: row.email,
+    streakDays: row.streak_days ?? 0,
   };
+}
+
+// ── Plantilla robusta — export CSV, asignación masiva de cursos ─────
+
+// Exporta al servidor el mismo WHERE que ya filtró la lista (status/depto/
+// planta/turno/contrato/búsqueda) — así "exportar lo que ves" es literal,
+// no una reconstrucción aparte en el cliente con menos columnas.
+export async function exportEmployeesCsv(token, filters = {}) {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(filters)) {
+    if (v !== undefined && v !== null && v !== "" && v !== "Todos") params.set(k, v);
+  }
+  const qs = params.toString();
+  const res = await fetch(`${API_BASE}/api/employees/export${qs ? `?${qs}` : ""}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Error al exportar (${res.status})`);
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  return { blob, filename: match ? match[1] : "empleados-codice.csv" };
+}
+
+export function fetchCourses(token) {
+  return authedFetch(token, `/api/courses`);
+}
+
+export function assignCourseBulk(token, courseId, employeeIds) {
+  return authedFetchJSON(token, `/api/courses/${courseId}/assign-bulk`, "POST", { employeeIds });
 }

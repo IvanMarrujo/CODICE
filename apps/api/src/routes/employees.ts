@@ -24,11 +24,12 @@ const router = Router()
 // "IMPORT DEBUG" (Plantilla truncaba en 100 antes de esa subida). `limit`
 // es el nombre nuevo para la paginación real de la UI de Plantilla (tope 100).
 const listQuerySchema = z.object({
-  status:     z.string().optional(),
-  department: z.string().optional(),
-  plant:      z.string().optional(),
-  shift:      z.string().optional(),
-  search:     z.string().optional(),
+  status:       z.string().optional(),
+  department:   z.string().optional(),
+  plant:        z.string().optional(),
+  shift:        z.string().optional(),
+  contractType: z.string().optional(),
+  search:       z.string().optional(),
 }).merge(paginationQuerySchema)
 
 const employeeInputSchema = z.object({
@@ -109,37 +110,55 @@ export async function findEmployeeOr404(tenantDb: any, tenantId: string, id: str
   return rows[0]
 }
 
+// Filtros compartidos entre GET / (paginado) y GET /export (todo lo que
+// matchea, sin paginar) — así "exportar lo que ves" es literalmente la misma
+// condición WHERE que ya filtró la lista, no una reimplementación aparte.
+function buildEmployeeFilterSql(
+  tenantId: string,
+  filters: { status?: string; department?: string; plant?: string; shift?: string; contractType?: string; search?: string }
+): { whereSql: Prisma.Sql; orderSql: Prisma.Sql } {
+  const { status, department, plant, shift, contractType, search } = filters
+  const conditions: Prisma.Sql[] = [Prisma.sql`tenant_id = ${tenantId}`]
+  conditions.push(status ? Prisma.sql`status = ${status}` : Prisma.sql`status != 'Baja'`)
+  if (department)   conditions.push(Prisma.sql`department = ${department}`)
+  if (plant)        conditions.push(Prisma.sql`plant = ${plant}`)
+  if (shift)        conditions.push(Prisma.sql`shift = ${shift}`)
+  if (contractType) conditions.push(Prisma.sql`contract_type = ${contractType}`)
+  if (search) {
+    conditions.push(Prisma.sql`(full_name ILIKE ${'%' + search + '%'} OR similarity(full_name, ${search}) > 0.15)`)
+  }
+
+  const whereSql = Prisma.join(conditions, ' AND ')
+  const orderSql = search
+    ? Prisma.sql`ORDER BY similarity(full_name, ${search}) DESC`
+    : Prisma.sql`ORDER BY created_at DESC`
+  return { whereSql, orderSql }
+}
+
+function yearsSince(date: string | Date): number {
+  const ms = Date.now() - new Date(date).getTime()
+  return Math.max(0, Math.floor(ms / (365.25 * 24 * 3600 * 1000)))
+}
+
 // ── GET /api/employees ───────────────────────────────────────
 // Lista paginada con filtros y búsqueda difusa (pg_trgm) sobre full_name.
 
 router.get('/', requireHR, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = listQuerySchema.parse(req.query)
-    const { status, department, plant, shift, search, page } = parsed
+    const { status, department, plant, shift, contractType, search, page } = parsed
     const pageSize = resolvePageSize(parsed)
     const tenantId = req.tenant.id
     const tenantDb = req.tenantDb
 
-    const conditions: Prisma.Sql[] = [Prisma.sql`tenant_id = ${tenantId}`]
-    conditions.push(status ? Prisma.sql`status = ${status}` : Prisma.sql`status != 'Baja'`)
-    if (department) conditions.push(Prisma.sql`department = ${department}`)
-    if (plant)      conditions.push(Prisma.sql`plant = ${plant}`)
-    if (shift)      conditions.push(Prisma.sql`shift = ${shift}`)
-    if (search) {
-      conditions.push(Prisma.sql`(full_name ILIKE ${'%' + search + '%'} OR similarity(full_name, ${search}) > 0.15)`)
-    }
-
-    const whereSql  = Prisma.join(conditions, ' AND ')
-    const orderSql  = search
-      ? Prisma.sql`ORDER BY similarity(full_name, ${search}) DESC`
-      : Prisma.sql`ORDER BY created_at DESC`
+    const { whereSql, orderSql } = buildEmployeeFilterSql(tenantId, { status, department, plant, shift, contractType, search })
     const offset = (page - 1) * pageSize
 
     const [data, totalRows] = await Promise.all([
       tenantDb.$queryRaw<any[]>`
         SELECT id, employee_code, rfc, curp, first_name, last_name, full_name, department, position,
                plant, shift, contract_type, hire_date, daily_salary, monthly_salary, email, phone,
-               status, xp_points, xp_level, created_at
+               status, xp_points, xp_level, streak_days, created_at
         FROM employees
         WHERE ${whereSql}
         ${orderSql}
@@ -153,6 +172,93 @@ router.get('/', requireHR, async (req: Request, res: Response, next: NextFunctio
     // son el mismo arreglo — así ni fetchEmployees() ni la nueva UI de
     // Plantilla paginada tienen que cambiar de contrato.
     res.json({ data, employees: data, ...paginationMeta(page, pageSize, total) })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── GET /api/employees/export ─────────────────────────────────
+// CSV de TODOS los empleados que matchean los filtros (no solo la página
+// visible) — mismos parámetros que GET /, mismo WHERE (buildEmployeeFilterSql).
+// Debe registrarse ANTES de '/:id' (mismo gotcha que /status-summary abajo).
+
+const exportQuerySchema = z.object({
+  status:       z.string().optional(),
+  department:   z.string().optional(),
+  plant:        z.string().optional(),
+  shift:        z.string().optional(),
+  contractType: z.string().optional(),
+  search:       z.string().optional(),
+})
+
+const EXPORT_MAX_ROWS = 5000 // límite defensivo — ningún tenant real se acerca a esto hoy
+
+function csvEscape(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  const s = String(value)
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+
+const EXPORT_COLUMNS: { header: string; get: (r: any) => unknown }[] = [
+  { header: 'Clave',           get: (r) => r.employee_code },
+  { header: 'Nombre',          get: (r) => r.full_name },
+  { header: 'RFC',             get: (r) => r.rfc },
+  { header: 'CURP',            get: (r) => r.curp },
+  { header: 'NSS',             get: (r) => r.nss },
+  { header: 'Departamento',    get: (r) => r.department },
+  { header: 'Puesto',          get: (r) => r.position },
+  { header: 'Turno',           get: (r) => r.shift },
+  { header: 'Planta',          get: (r) => r.plant },
+  { header: 'Contrato',        get: (r) => r.contract_type },
+  { header: 'Salario Diario',  get: (r) => r.daily_salary },
+  { header: 'Salario Mensual', get: (r) => r.monthly_salary },
+  { header: 'SBC IMSS',        get: (r) => r.salary_base_imss },
+  { header: 'Fecha Ingreso',   get: (r) => (r.hire_date ? new Date(r.hire_date).toISOString().slice(0, 10) : '') },
+  { header: 'Antigüedad',      get: (r) => (r.hire_date ? yearsSince(r.hire_date) : '') },
+  { header: 'Status',          get: (r) => r.status },
+  { header: 'Email',           get: (r) => r.email },
+  { header: 'Teléfono',        get: (r) => r.phone },
+  { header: 'Último Neto',     get: (r) => (r.net_pay != null ? r.net_pay : '') },
+]
+
+router.get('/export', requireHR, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { status, department, plant, shift, contractType, search } = exportQuerySchema.parse(req.query)
+    const tenantId = req.tenant.id
+    const tenantDb = req.tenantDb
+
+    const { whereSql } = buildEmployeeFilterSql(tenantId, { status, department, plant, shift, contractType, search })
+
+    // net_pay: mismo criterio "último recibo por fecha de pago" que
+    // GET /api/payroll/latest-by-employee — LATERAL en vez de esa misma
+    // query aparte para no traer TODOS los recibos del tenant a memoria
+    // solo para quedarnos con uno por empleado.
+    const rows = await tenantDb.$queryRaw<any[]>`
+      SELECT e.employee_code, e.full_name, e.rfc, e.curp, e.nss, e.department, e.position, e.shift,
+             e.plant, e.contract_type, e.daily_salary, e.monthly_salary, e.salary_base_imss,
+             e.hire_date, e.status, e.email, e.phone, latest.net_pay
+      FROM employees e
+      LEFT JOIN LATERAL (
+        SELECT net_pay FROM payroll_records p
+        WHERE p.employee_id = e.id
+        ORDER BY p.payment_date DESC NULLS LAST
+        LIMIT 1
+      ) latest ON true
+      WHERE ${whereSql}
+      ORDER BY e.full_name
+      LIMIT ${EXPORT_MAX_ROWS}
+    `
+
+    const lines = [
+      EXPORT_COLUMNS.map((c) => csvEscape(c.header)).join(','),
+      ...rows.map((r: any) => EXPORT_COLUMNS.map((c) => csvEscape(c.get(r))).join(',')),
+    ]
+
+    const dateStr = new Date().toISOString().slice(0, 10)
+    const slug = req.tenant.slug || tenantId
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="empleados-${slug}-${dateStr}.csv"`)
+    res.send(lines.join('\n'))
   } catch (err) {
     next(err)
   }
