@@ -159,7 +159,7 @@ router.get('/', requireHR, async (req: Request, res: Response, next: NextFunctio
       tenantDb.$queryRaw<any[]>`
         SELECT id, employee_code, rfc, curp, first_name, last_name, full_name, department, position,
                plant, shift, contract_type, hire_date, daily_salary, monthly_salary, email, phone,
-               status, xp_points, xp_level, streak_days, created_at
+               status, xp_points, xp_level, streak_days, created_at, seniority_years
         FROM employees
         WHERE ${whereSql}
         ${orderSql}
