@@ -571,7 +571,7 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.connected_sources (
   tenant_id             TEXT        NOT NULL,
 
   type                  TEXT        NOT NULL,
-  -- EXCEL | DBF | CFDI
+  -- EXCEL | DBF | CFDI | ZOHO
 
   file_name             TEXT        NOT NULL,
   file_content           TEXT        NOT NULL,   -- base64 del archivo original

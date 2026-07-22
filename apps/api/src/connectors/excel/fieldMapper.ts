@@ -24,6 +24,9 @@ export type CanonicalField =
   | 'bank_name'
   | 'bank_clabe'
   | 'notes'
+  | 'email'
+  | 'phone'
+  | 'supervisor_name'
   // ── Campos de nómina (payroll_records) — ver PAYROLL_FIELDS más abajo ──
   | 'gross_taxable'
   | 'gross_exempt'
@@ -130,6 +133,18 @@ const ALIASES: Record<CanonicalField, string[]> = {
     'CLABE', 'CUENTA_CLABE', 'NUM_CUENTA', 'CUENTA_BANCARIA', 'CLABE_INTERBANCARIA',
   ],
   notes: ['notes'],
+  email: [
+    'email', 'correo', 'correo electronico', 'e-mail', 'e mail',
+    'EMAIL', 'CORREO', 'CORREO_ELECTRONICO',
+  ],
+  phone: [
+    'telefono', 'teléfono', 'celular', 'phone', 'mobile',
+    'TELEFONO', 'CELULAR', 'TEL', 'NUM_CEL',
+  ],
+  supervisor_name: [
+    'supervisor', 'jefe directo', 'jefe inmediato', 'reporta a',
+    'SUPERVISOR', 'JEFE_DIRECTO', 'JEFE_INMEDIATO', 'REPORTA_A',
+  ],
 
   // ── Nómina — permiten que el mismo Excel genérico (o un export real de
   // Nomipaq Excel) traiga percepciones/deducciones por fila y alimente
@@ -225,6 +240,9 @@ export const CANONICAL_FIELD_LABELS: Record<CanonicalField, string> = {
   bank_name:     'Banco',
   bank_clabe:    'CLABE',
   notes:         'Notas',
+  email:         'Correo electrónico',
+  phone:         'Teléfono',
+  supervisor_name: 'Supervisor',
 
   gross_taxable:    'Percepciones (gravadas)',
   gross_exempt:     'Percepciones exentas',
@@ -314,21 +332,19 @@ export function mapHeaders(headers: unknown[], overrideMap?: Record<string, stri
 
 // ── Sugerencias por similitud (Tier 2) ──────────────────────────
 // Para headers que NO matchearon por alias exacto ("Sin mapear"). Combina
-// hints curados de nombres reales frecuentes (incluye mapeos que ninguna
-// métrica de texto detectaría, ej. "SUPERVISOR" -> notes, un campo que no
-// existe como columna dedicada) con similitud de edición como fallback
-// genérico para cualquier otro header parecido a un campo canónico.
+// hints curados de nombres reales frecuentes con similitud de edición como
+// fallback genérico para cualquier otro header parecido a un campo canónico.
 //
 // 'clave', 'no empleado', 'salario mensual', 'sueldo mensual', 'sal
-// mensual', 'banco', 'clabe' y 'cuenta clabe' se quitaron de aquí: ahora
-// son alias exactos (ver ALIASES arriba, headers reales de Nomipaq/
-// CONTPAQi) — dejarlos aquí los habría vuelto inalcanzables (mapHeaders
-// siempre revisa ALIASES antes que suggestField).
+// mensual', 'banco', 'clabe', 'cuenta clabe', 'supervisor' y 'jefe directo'
+// se quitaron de aquí: ahora son alias exactos (ver ALIASES arriba) —
+// dejarlos aquí los habría vuelto inalcanzables (mapHeaders siempre revisa
+// ALIASES antes que suggestField).
 
 const SUGGESTION_HINTS: Record<string, CanonicalField> = {
   'numero empleado': 'employee_code', 'codigo': 'employee_code', 'codigo empleado': 'employee_code',
   'cuenta': 'bank_clabe',
-  'supervisor': 'notes', 'jefe directo': 'notes', 'jefe': 'notes', 'observaciones': 'notes',
+  'jefe': 'supervisor_name', 'observaciones': 'notes',
 }
 
 function levenshtein(a: string, b: string): number {
