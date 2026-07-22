@@ -253,6 +253,7 @@ router.post('/preview/cfdi', requireHR, handlePreviewCfdiUpload, async (req: Req
 
 export const WRITABLE_EMPLOYEE_COLUMNS: (keyof EmployeeUpsertRow)[] = [
   'first_name', 'last_name', 'rfc', 'curp', 'nss', 'daily_salary', 'monthly_salary', 'salary_base_imss',
+  'seniority_years',
   'department', 'position', 'plant', 'shift', 'hire_date',
   'contract_type', 'status', 'employee_code', 'bank_name', 'bank_clabe', 'notes',
 ]

@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.employees (
   hire_date         DATE,
   termination_date  DATE,
   trial_end_date    DATE,                    -- fin de periodo de prueba
+  seniority_years   NUMERIC(4,1),            -- antigüedad declarada (fallback cuando hire_date es null)
 
   -- Salario
   daily_salary      NUMERIC(10,2),

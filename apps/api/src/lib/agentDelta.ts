@@ -40,7 +40,7 @@ export interface ApplyDeltaResult {
 }
 
 const EMPLOYEE_DATE_FIELDS   = new Set(['hire_date'])
-const EMPLOYEE_NUMERIC_FIELDS = new Set(['daily_salary', 'monthly_salary', 'salary_base_imss'])
+const EMPLOYEE_NUMERIC_FIELDS = new Set(['daily_salary', 'monthly_salary', 'salary_base_imss', 'seniority_years'])
 const PAYROLL_DATE_FIELDS    = new Set(['period_start', 'period_end', 'payment_date'])
 const PAYROLL_NUMERIC_FIELDS = new Set([
   'days_paid', 'gross_taxable', 'gross_exempt', 'total_income', 'isr',

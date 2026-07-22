@@ -14,6 +14,7 @@ export interface EmployeeUpsertRow {
   daily_salary?:  number
   monthly_salary?: number
   salary_base_imss?: number
+  seniority_years?: number
   department?:    string
   position?:      string
   plant?:         string

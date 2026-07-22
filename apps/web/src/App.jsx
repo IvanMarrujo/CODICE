@@ -1512,6 +1512,21 @@ function SbcCard({ token, employeeId }) {
   );
 }
 
+// Antigüedad declarada (employees.seniority_years) — fallback para cuando el
+// import no traía fecha de ingreso real, solo un "años de antigüedad" del
+// sistema legacy. Fetch propio (no depende de SbcCard) para mantener el
+// cherry-pick de este campo aislado de los demás cambios de ese commit.
+function SeniorityNote({ token, employeeId }) {
+  const detail = useEmployeeDetail(token, employeeId);
+  const years = detail.data?.seniority_years;
+  if (years == null) return null;
+  return (
+    <div className="muted2" style={{ fontSize: 11.5, marginTop: -10, marginBottom: 18 }}>
+      Antigüedad declarada: {Number(years)} años
+    </div>
+  );
+}
+
 function ResumenTab({ e, setStatus, update, token }) {
   const dv = diasVacaciones(e.antiguedad); const sd = e.salario / 30;
   return (
@@ -1519,6 +1534,7 @@ function ResumenTab({ e, setStatus, update, token }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
         <Mini label="Planta" v={e.planta} /><Mini label="Turno" v={e.turno} /><Mini label="Ingreso" v={e.ingreso} /><Mini label="Antigüedad" v={`${e.antiguedad} años`} /><Mini label="Salario mensual" v={mxn(e.salario)} /><Mini label="Contrato" v={e.contrato} />
       </div>
+      {!e.ingreso && <SeniorityNote token={token} employeeId={e.dbId} />}
       <Eyebrow>Modificar estatus</Eyebrow>
       <div style={{ display: "flex", gap: 7, flexWrap: "wrap", margin: "9px 0 18px" }}>
         {Object.keys(STATUS).map((s) => <button key={s} className={`btn btn-sm ${e.status === s ? "btn-accent" : ""}`} onClick={() => setStatus(e.dbId, s)}><span className="dot" style={{ background: STATUS[s] }} />{s}</button>)}

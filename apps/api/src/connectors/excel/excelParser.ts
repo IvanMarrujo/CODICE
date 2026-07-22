@@ -37,6 +37,7 @@ export interface ParsedEmployeeRow {
   daily_salary?:   number
   monthly_salary?: number
   salary_base_imss?: number
+  seniority_years?: number
   department?:     string
   position?:       string
   plant?:          string
@@ -210,6 +211,11 @@ function mapRowValues(values: Partial<Record<CanonicalField, unknown>>, rowNumbe
     const n = parseSalary(values.salary_base_imss)
     if (n === null) throw new Error(`SBC inválido: "${values.salary_base_imss}"`)
     out.salary_base_imss = n
+  }
+  if (values.seniority_years != null) {
+    const n = parseSalary(values.seniority_years)
+    if (n === null) throw new Error(`Antigüedad declarada inválida: "${values.seniority_years}"`)
+    out.seniority_years = n
   }
 
   if (values.department != null)    out.department    = String(values.department).trim()

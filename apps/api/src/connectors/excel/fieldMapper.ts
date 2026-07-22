@@ -12,6 +12,7 @@ export type CanonicalField =
   | 'daily_salary'
   | 'monthly_salary'
   | 'salary_base_imss'
+  | 'seniority_years'
   | 'department'
   | 'position'
   | 'plant'
@@ -70,6 +71,10 @@ const ALIASES: Record<CanonicalField, string[]> = {
     'BASE_IMSS', 'SALARIO_BASE_IMSS', 'SBC', 'SDI',
     'SAL_BASE_COT', 'SALARIO_BASE_COTIZACION', 'SALARIO_DIARIO_INTEGRADO',
     'SAL_INT', 'SUELDO_INTEGRADO', 'BASE_COTIZACION',
+  ],
+  seniority_years: [
+    'antiguedad_anios', 'ANTIGUEDAD_ANIOS', 'antiguedad', 'anios_servicio',
+    'años_servicio', 'years_of_service', 'antiguedad_anos', 'seniority',
   ],
   department: [
     'departamento', 'depto', 'area', 'área',
@@ -208,6 +213,7 @@ export const CANONICAL_FIELD_LABELS: Record<CanonicalField, string> = {
   daily_salary:  'Salario diario',
   monthly_salary: 'Salario mensual',
   salary_base_imss: 'SBC (Base Cotización IMSS)',
+  seniority_years: 'Antigüedad declarada (años)',
   department:    'Departamento',
   position:      'Puesto',
   plant:         'Planta',
