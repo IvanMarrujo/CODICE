@@ -2261,7 +2261,7 @@ function FieldMapperTable({ headers, manualMap, setManualMap, customFieldTypes, 
   );
 }
 
-function FieldMapperStep({ preview, manualMap, setManualMap, customFieldTypes, setCustomFieldTypes, onContinue, onBack }) {
+function FieldMapperStep({ preview, manualMap, setManualMap, customFieldTypes, setCustomFieldTypes, onContinue, onBack, busy, err }) {
   // Categoriza cada header por el campo YA detectado o el que el usuario
   // mapeó manualmente — así una columna reasignada a mano cambia de sección.
   const fieldFor = (h) => manualMap[h.index] || h.field;
@@ -2331,9 +2331,12 @@ function FieldMapperStep({ preview, manualMap, setManualMap, customFieldTypes, s
           ⚠️ Se requiere RFC o Clave de empleado
         </div>
       )}
+      {err && <div style={{ fontSize: 12, color: "var(--rose)", marginTop: 10 }}>{err}</div>}
       <div className="row" style={{ gap: 10, marginTop: 20, justifyContent: "flex-end" }}>
         <button className="btn" onClick={onBack}>← Atrás</button>
-        <button className="btn btn-accent" disabled={!identifierMapped} onClick={onContinue}>Continuar</button>
+        <button className="btn btn-accent" disabled={!identifierMapped || busy} onClick={onContinue}>
+          {busy ? <><RefreshCw size={13} className="muted" />Actualizando vista previa…</> : "Continuar"}
+        </button>
       </div>
     </div>
   );
@@ -2703,23 +2706,53 @@ function ModoAWizard({ token, socket, onClose, onImported, sourceType = "EXCEL",
     }
   };
 
+  // Mapeo COMPLETO confirmado en el Step 3 (auto-detectado + sugerencias
+  // aplicadas + overrides manuales + campos personalizados), por header de
+  // texto — usado tanto para refrescar la vista previa (goToPreview) como
+  // para el import real (confirmImport), así ambos ven exactamente lo mismo.
+  const buildFieldMap = () => {
+    const fieldMap = {};
+    if (preview?.headers) {
+      for (const h of preview.headers) {
+        const field = manualMap[h.index] || h.field;
+        if (field) fieldMap[h.label] = field;
+      }
+    }
+    return fieldMap;
+  };
+
+  // Mapeo -> Vista previa: re-parsea el archivo con el mapeo YA confirmado
+  // (incluye campos personalizados recién creados) antes de mostrar el
+  // Step 3.5 — sin esto, la vista previa y el checklist del Step 4 seguían
+  // mostrando los datos de la auto-detección inicial, de antes de que el
+  // usuario mapeara nada a mano (bug encontrado en prueba manual del wizard).
+  const goToPreview = async () => {
+    if (!isExcel) { setStep(3); return; }
+    setPreviewBusy(true);
+    setPreviewErr(null);
+    try {
+      const res = await previewExcel(token, files[0], {
+        sourceType: backendSourceType,
+        fieldMap: JSON.stringify(buildFieldMap()),
+      });
+      setPreview(res);
+      setStep(3);
+    } catch (e) {
+      setPreviewErr(e.message);
+    } finally {
+      setPreviewBusy(false);
+    }
+  };
+
   const confirmImport = async () => {
     setStep(5);
     setProgress({ processed: 0, total: preview?.totalRows || files.length });
     setCommitErr(null);
     try {
       const endpoint = system?.format === "cfdi" ? "/api/connectors/upload/cfdi" : "/api/connectors/upload/excel";
-      // Mapeo COMPLETO confirmado en el Step 3 (auto-detectado + sugerencias
-      // aplicadas + overrides manuales), por header de texto — el backend lo
-      // usa tal cual para el import real y lo guarda para la próxima subida
-      // (ver PART 1/4 del mapeo inteligente).
       let extraFields;
       if (isExcel && preview?.headers) {
-        const fieldMap = {};
-        for (const h of preview.headers) {
-          const field = manualMap[h.index] || h.field;
-          if (field) fieldMap[h.label] = field;
-        }
+        const fieldMap = buildFieldMap();
         extraFields = { sourceType: backendSourceType };
         if (Object.keys(fieldMap).length > 0) extraFields.fieldMap = JSON.stringify(fieldMap);
       }
@@ -2763,7 +2796,7 @@ function ModoAWizard({ token, socket, onClose, onImported, sourceType = "EXCEL",
         <FieldMapperStep
           preview={preview} manualMap={manualMap} setManualMap={setManualMap}
           customFieldTypes={customFieldTypes} setCustomFieldTypes={setCustomFieldTypes}
-          onContinue={() => setStep(3)} onBack={() => setStep(1)}
+          onContinue={goToPreview} onBack={() => setStep(1)} busy={previewBusy} err={previewErr}
         />
       )}
       {step === 3 && preview && (isExcel
