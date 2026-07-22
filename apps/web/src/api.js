@@ -154,12 +154,16 @@ export function replaceConnectedSourceFile(token, sourceId, files, onProgress) {
   });
 }
 
-// Dry-run: parsea el archivo (headers detectados + primeras 5 filas) sin
+// Dry-run: parsea el archivo (headers detectados + primeras 10 filas) sin
 // escribir en DB — usado por el wizard de conectores (Modo A, steps 3-4).
-export function previewExcel(token, file) {
+// `extraFields` (opcional): `fieldMap` (JSON string, override manual ya
+// confirmado) y/o `sourceType` — ver FEATURE 4 del mapeo inteligente,
+// mismo patrón que `extraFields` en uploadConnectorFile.
+export function previewExcel(token, file, extraFields) {
   return new Promise((resolve, reject) => {
     const form = new FormData();
     form.append("file", file);
+    if (extraFields) Object.entries(extraFields).forEach(([k, v]) => form.append(k, v));
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE}/api/connectors/preview/excel`);
     xhr.setRequestHeader("Authorization", `Bearer ${token}`);

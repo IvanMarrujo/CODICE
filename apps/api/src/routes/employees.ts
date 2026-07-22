@@ -50,6 +50,7 @@ const employeeInputSchema = z.object({
   phone:         z.string().optional(),
   status:        z.string().optional(),
   notes:         z.string().optional(),
+  customFields:  z.record(z.string()).optional(),
 })
 
 const createSchema = employeeInputSchema.extend({
@@ -363,13 +364,17 @@ router.get('/:id/gamification', requireEmployee, async (req: Request, res: Respo
 
 router.post('/', requireHR, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const input = createSchema.parse(req.body)
+    const { customFields, ...input } = createSchema.parse(req.body)
     const tenantId = req.tenant.id
     const tenantDb = req.tenantDb
 
     const entries = Object.entries(input).filter(([, v]) => v !== undefined) as [string, unknown][]
-    const columns = entries.map(([k]) => Prisma.raw(COLUMN_MAP[k]))
-    const values  = entries.map(([, v]) => v)
+    const columns: Prisma.Sql[] = entries.map(([k]) => Prisma.raw(COLUMN_MAP[k]))
+    const values: unknown[]  = entries.map(([, v]) => v)
+    if (customFields && Object.keys(customFields).length > 0) {
+      columns.push(Prisma.raw('custom_fields'))
+      values.push(Prisma.sql`${JSON.stringify(customFields)}::jsonb`)
+    }
 
     const columnsSql = Prisma.join([Prisma.raw('tenant_id'), ...columns], ', ')
     const valuesSql  = Prisma.join([tenantId, ...values], ', ')
@@ -392,16 +397,22 @@ router.post('/', requireHR, async (req: Request, res: Response, next: NextFuncti
 
 router.patch('/:id', requireHR, async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const input = employeeInputSchema.parse(req.body)
+    const { customFields, ...rest } = employeeInputSchema.parse(req.body)
     const tenantId = req.tenant.id
     const tenantDb = req.tenantDb
 
-    const entries = Object.entries(input).filter(([, v]) => v !== undefined) as [string, unknown][]
-    if (entries.length === 0) throw new AppError(400, 'No se enviaron campos para actualizar')
+    const entries = Object.entries(rest).filter(([, v]) => v !== undefined) as [string, unknown][]
+    if (entries.length === 0 && !customFields) throw new AppError(400, 'No se enviaron campos para actualizar')
 
     const before = await findEmployeeOr404(tenantDb, tenantId, req.params.id)
 
     const setFragments = entries.map(([k, v]) => Prisma.sql`${Prisma.raw(COLUMN_MAP[k])} = ${v}`)
+    // custom_fields se MERGEA (no sobreescribe) — editar un solo campo
+    // personalizado en Expediente -> Perfil no debe borrar los demás que ya
+    // tenía el empleado (ver upsertEmployee en routes/connectors.ts, mismo criterio).
+    if (customFields && Object.keys(customFields).length > 0) {
+      setFragments.push(Prisma.sql`${Prisma.raw('custom_fields')} = COALESCE(${Prisma.raw('custom_fields')}, '{}'::jsonb) || ${JSON.stringify(customFields)}::jsonb`)
+    }
 
     const rows = await tenantDb.$queryRaw<any[]>`
       UPDATE employees SET ${Prisma.join(setFragments, ', ')}
