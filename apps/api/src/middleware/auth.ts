@@ -69,3 +69,7 @@ export const requireAdmin     = requireRole('SUPER_ADMIN')
 export const requireHR        = requireRole('SUPER_ADMIN', 'HR_MANAGER', 'HR_ANALYST')
 export const requireManager   = requireRole('SUPER_ADMIN', 'HR_MANAGER', 'HR_ANALYST', 'AREA_MANAGER')
 export const requireEmployee  = requireRole('SUPER_ADMIN', 'HR_MANAGER', 'HR_ANALYST', 'AREA_MANAGER', 'EMPLOYEE')
+// Supervisor Shell (apps/web/src/components/SupervisorShell.jsx) — solo el
+// propio supervisor o un SUPER_ADMIN de soporte, nunca HR_MANAGER/ANALYST a
+// secas (esas rutas devuelven datos ya recortados por equipo, no por rol).
+export const requireAreaManager = requireRole('SUPER_ADMIN', 'AREA_MANAGER')

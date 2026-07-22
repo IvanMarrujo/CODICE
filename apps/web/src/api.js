@@ -281,6 +281,16 @@ export function fetchEmployeeStatusSummary(token) {
   return authedFetch(token, `/api/employees/status-summary`);
 }
 
+// ── Supervisores (AREA_MANAGER) — Supervisor Shell ──────────────
+
+export function fetchSupervisors(token) {
+  return authedFetch(token, `/api/admin/supervisors`);
+}
+
+export function createSupervisor(token, payload) {
+  return authedFetchJSON(token, `/api/admin/supervisors`, "POST", payload);
+}
+
 // ── Perfil de salud del colaborador ────────────────────────────
 
 export function fetchEmployeeHealth(token, employeeId) {

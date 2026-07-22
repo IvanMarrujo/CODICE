@@ -49,6 +49,7 @@ import { startRadarWeekly } from './jobs/radarWeekly'
 import { startGamificationDaily } from './jobs/gamificationDaily'
 import zktecoWebhookRoutes from './routes/zktecoWebhook'
 import deviceRoutes from './routes/devices'
+import supervisorRoutes from './routes/supervisor'
 
 const PORT = process.env.API_PORT || 3001
 
@@ -138,6 +139,7 @@ app.use('/api/radar',      radarRoutes)
 app.use('/api/news',       newsRoutes)
 app.use('/api/devices',    deviceRoutes)
 app.use('/api/mentions',   mentionRoutes)
+app.use('/api/supervisor', supervisorRoutes)
 
 // Auspex (solo SUPER_ADMIN)
 app.use('/api/auspex', auspexRoutes)

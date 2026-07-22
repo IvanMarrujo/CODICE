@@ -25,6 +25,7 @@ import {
   createEmployee, updateEmployee, deleteEmployee, bulkDeleteEmployees,
   deletePayrollRecord, bulkDeletePayrollRecords,
   fetchEmployeeStatusSummary, fetchEmployeeHealth, updateEmployeeHealth,
+  fetchSupervisors, createSupervisor,
   uploadHealthDocument, deleteHealthDocument, downloadHealthDocument, fetchHealthDocumentInsights,
   fetchAdminProfile, updateAdminProfile,
   fetchWhatsAppSettings, updateWhatsAppSettings, fetchWhatsAppMockLog, simulateWhatsAppAgent,
@@ -4589,9 +4590,133 @@ function LivePunchFeed({ socket }) {
   );
 }
 
+function useSupervisors(token, refreshKey) {
+  const [state, setState] = useState({ status: "loading", data: [] });
+  useEffect(() => {
+    if (!token) return;
+    fetchSupervisors(token)
+      .then(({ data }) => setState({ status: "ready", data: data || [] }))
+      .catch(() => setState({ status: "error", data: [] }));
+  }, [token, refreshKey]);
+  return state;
+}
+
+function AddSupervisorDrawer({ token, onClose, onCreated }) {
+  const [f, setF] = useState({ firstName: "", lastName: "", email: "", password: "", assignedDepartment: ORG.deptos[0] });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
+
+  const crear = async () => {
+    if (!f.firstName.trim() || !f.lastName.trim() || !f.email.trim() || f.password.length < 8) {
+      setError("Nombre, apellido, correo y una contraseña de al menos 8 caracteres son requeridos.");
+      return;
+    }
+    setBusy(true); setError(null);
+    try {
+      await createSupervisor(token, f);
+      toast(`Supervisor creado · ${f.firstName} ${f.lastName}`);
+      onCreated();
+      onClose();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <><div className="scrim" onClick={onClose} />
+      <div className="drawer" style={{ padding: 22 }}>
+        <div className="row" style={{ justifyContent: "space-between", marginBottom: 18 }}>
+          <Eyebrow>Nuevo supervisor</Eyebrow>
+          <X size={18} className="handle" style={{ cursor: "pointer" }} onClick={onClose} />
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+          <div><label className="sub" style={{ fontSize: 11 }}>Nombre</label><input className="input" value={f.firstName} onChange={set("firstName")} /></div>
+          <div><label className="sub" style={{ fontSize: 11 }}>Apellido</label><input className="input" value={f.lastName} onChange={set("lastName")} /></div>
+        </div>
+        <label className="sub" style={{ fontSize: 11 }}>Correo</label>
+        <input className="input" style={{ marginBottom: 10 }} type="email" value={f.email} onChange={set("email")} />
+        <label className="sub" style={{ fontSize: 11 }}>Contraseña temporal</label>
+        <input className="input" style={{ marginBottom: 10 }} type="password" value={f.password} onChange={set("password")} />
+        <label className="sub" style={{ fontSize: 11 }}>Departamento asignado</label>
+        <select className="select" style={{ marginBottom: 16 }} value={f.assignedDepartment} onChange={set("assignedDepartment")}>
+          {ORG.deptos.map((d) => <option key={d}>{d}</option>)}
+        </select>
+        {error && <div style={{ color: "var(--rose)", fontSize: 12, marginBottom: 12 }}>{error}</div>}
+        <button className="btn btn-accent" style={{ width: "100%", justifyContent: "center" }} disabled={busy} onClick={crear}>
+          {busy ? "Creando…" : "Crear supervisor"}
+        </button>
+      </div></>
+  );
+}
+
+function SupervisoresPanel({ token }) {
+  const [refreshKey, setRefreshKey] = useState(0);
+  const supervisors = useSupervisors(token, refreshKey);
+  const [adding, setAdding] = useState(false);
+
+  return (
+    <div className="fadein">
+      <div className="row" style={{ justifyContent: "space-between", marginBottom: 6 }}>
+        <div>
+          <Eyebrow>Personas · Supervisores</Eyebrow>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: "5px 0 0" }}>Supervisores</h1>
+        </div>
+        <button className="btn btn-accent" onClick={() => setAdding(true)}><Plus size={14} />Agregar supervisor</button>
+      </div>
+      <div className="muted" style={{ fontSize: 13, marginBottom: 18, maxWidth: 640 }}>
+        Usuarios con rol AREA_MANAGER — acceden al Panel de Supervisor (/supervisor) con acceso solo a su equipo (por departamento asignado o por nombre en employees.supervisor_name).
+      </div>
+
+      {supervisors.status === "loading" && <div className="muted" style={{ fontSize: 12.5 }}>Cargando…</div>}
+      {supervisors.status === "ready" && supervisors.data.length === 0 && (
+        <div className="glass" style={{ padding: 24, textAlign: "center" }}>
+          <div className="muted" style={{ fontSize: 13 }}>Todavía no hay supervisores dados de alta.</div>
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        {supervisors.data.map((s) => (
+          <div key={s.id} className="glass" style={{ padding: 16 }}>
+            <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
+              <span style={{ fontWeight: 600, fontSize: 14 }}>{s.firstName} {s.lastName}</span>
+              <span className="chip" style={{ color: s.isActive ? "var(--emerald)" : "var(--muted-2)" }}>{s.isActive ? "Activo" : "Inactivo"}</span>
+            </div>
+            <div className="muted2" style={{ fontSize: 11.5, marginBottom: 10 }}>{s.email}</div>
+            <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+              <span className="chip">{s.assignedDepartment || "Sin depto asignado"}</span>
+              <span className="chip">{s.teamSize} en equipo</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {adding && <AddSupervisorDrawer token={token} onClose={() => setAdding(false)} onCreated={() => setRefreshKey((k) => k + 1)} />}
+    </div>
+  );
+}
+
 function Asistencia({ staff, attendance, openExpediente, token, socket }) {
   const rows = attendance.data || [];
   const [page, setPage] = useState(1);
+  const [bySupervisor, setBySupervisor] = useState(false);
+  const supervisors = useSupervisors(token);
+  const supervisorByDept = useMemo(() => {
+    const m = {};
+    for (const s of supervisors.data) {
+      if (s.assignedDepartment) m[s.assignedDepartment] = `${s.firstName} ${s.lastName}`;
+    }
+    return m;
+  }, [supervisors.data]);
+  const groupedBySupervisor = useMemo(() => {
+    const groups = {};
+    for (const r of rows) {
+      const key = supervisorByDept[r.department] || "Sin supervisor asignado";
+      (groups[key] ??= []).push(r);
+    }
+    return Object.entries(groups).sort((a, b) => b[1].length - a[1].length);
+  }, [rows, supervisorByDept]);
   useEffect(() => { setPage(1); }, [attendance.date]);
   const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const pageRows = rows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -4649,35 +4774,71 @@ function Asistencia({ staff, attendance, openExpediente, token, socket }) {
 
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
         <Eyebrow>Registro de hoy · {attendance.date}</Eyebrow>
-        <button className="btn" onClick={() => { download(`asistencia_${attendance.date}.csv`, toCSVAsistencia(rows)); toast(`CSV exportado · ${rows.length} filas`); }}><Download size={14} />Exportar CSV</button>
-      </div>
-      <div className="glass" style={{ overflow: "hidden", padding: 0, marginBottom: 20 }}>
-        <div style={{ maxHeight: 420, overflowY: "auto" }}>
-          <table className="tbl">
-            <thead style={{ position: "sticky", top: 0, background: "rgba(8,12,20,.92)", backdropFilter: "blur(8px)" }}>
-              <tr><th>Empleado</th><th>Depto</th><th>Turno</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Status</th></tr>
-            </thead>
-            <tbody>
-              {pageRows.map((r) => {
-                const s = STATUS_LABEL[attendanceStatus(r)];
-                const horas = r.checkInAt && r.checkOutAt ? fmtHM((new Date(r.checkOutAt) - new Date(r.checkInAt)) / 60000) : "—";
-                return (
-                  <tr key={r.employeeId} onClick={() => openExpediente?.(staff.find((x) => x.id === r.employeeCode))}>
-                    <td style={{ fontWeight: 500 }}>{r.name}</td>
-                    <td className="muted">{r.department}</td>
-                    <td><span className="chip">{r.shift}</span></td>
-                    <td className="mono">{fmtTime(r.checkInAt)}</td>
-                    <td className="mono">{fmtTime(r.checkOutAt)}</td>
-                    <td className="mono">{horas}</td>
-                    <td><span className="chip" style={{ color: s.color }}><span className="dot" style={{ background: s.color }} />{s.label}</span></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="row" style={{ gap: 8 }}>
+          <button className={`btn btn-sm ${bySupervisor ? "btn-accent" : ""}`} onClick={() => setBySupervisor((v) => !v)}>
+            <UserCheck size={13} />Ver por supervisor
+          </button>
+          <button className="btn" onClick={() => { download(`asistencia_${attendance.date}.csv`, toCSVAsistencia(rows)); toast(`CSV exportado · ${rows.length} filas`); }}><Download size={14} />Exportar CSV</button>
         </div>
       </div>
-      <Pagination page={page} totalPages={totalPages} total={rows.length} limit={PAGE_SIZE} onPageChange={setPage} itemLabel="registros" />
+
+      {bySupervisor ? (
+        <div style={{ marginBottom: 20 }}>
+          {groupedBySupervisor.map(([supervisorName, groupRows]) => (
+            <div key={supervisorName} className="glass" style={{ padding: 0, overflow: "hidden", marginBottom: 12 }}>
+              <div className="row" style={{ justifyContent: "space-between", padding: "10px 16px", borderBottom: "1px solid var(--border)" }}>
+                <span style={{ fontWeight: 600, fontSize: 13 }}>{supervisorName}</span>
+                <span className="chip">{groupRows.length} colaborador{groupRows.length === 1 ? "" : "es"}</span>
+              </div>
+              <table className="tbl">
+                <tbody>
+                  {groupRows.map((r) => {
+                    const s = STATUS_LABEL[attendanceStatus(r)];
+                    return (
+                      <tr key={r.employeeId} onClick={() => openExpediente?.(staff.find((x) => x.id === r.employeeCode))}>
+                        <td style={{ fontWeight: 500 }}>{r.name}</td>
+                        <td className="muted">{r.department}</td>
+                        <td className="mono">{fmtTime(r.checkInAt)}</td>
+                        <td><span className="chip" style={{ color: s.color }}><span className="dot" style={{ background: s.color }} />{s.label}</span></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <>
+          <div className="glass" style={{ overflow: "hidden", padding: 0, marginBottom: 20 }}>
+            <div style={{ maxHeight: 420, overflowY: "auto" }}>
+              <table className="tbl">
+                <thead style={{ position: "sticky", top: 0, background: "rgba(8,12,20,.92)", backdropFilter: "blur(8px)" }}>
+                  <tr><th>Empleado</th><th>Depto</th><th>Turno</th><th>Entrada</th><th>Salida</th><th>Horas</th><th>Status</th></tr>
+                </thead>
+                <tbody>
+                  {pageRows.map((r) => {
+                    const s = STATUS_LABEL[attendanceStatus(r)];
+                    const horas = r.checkInAt && r.checkOutAt ? fmtHM((new Date(r.checkOutAt) - new Date(r.checkInAt)) / 60000) : "—";
+                    return (
+                      <tr key={r.employeeId} onClick={() => openExpediente?.(staff.find((x) => x.id === r.employeeCode))}>
+                        <td style={{ fontWeight: 500 }}>{r.name}</td>
+                        <td className="muted">{r.department}</td>
+                        <td><span className="chip">{r.shift}</span></td>
+                        <td className="mono">{fmtTime(r.checkInAt)}</td>
+                        <td className="mono">{fmtTime(r.checkOutAt)}</td>
+                        <td className="mono">{horas}</td>
+                        <td><span className="chip" style={{ color: s.color }}><span className="dot" style={{ background: s.color }} />{s.label}</span></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <Pagination page={page} totalPages={totalPages} total={rows.length} limit={PAGE_SIZE} onPageChange={setPage} itemLabel="registros" />
+        </>
+      )}
 
       <Eyebrow>Estación QR de Asistencia</Eyebrow>
       <div className="glass" style={{ padding: 18, marginTop: 8 }}>
@@ -4916,6 +5077,7 @@ const NAV = [
   ["_s", "Personas"],
   ["capacitacion", "Capacitación", GraduationCap], ["senalizacion", "Señalización", Monitor],
   ["autoservicio", "Autoservicio", MessageSquareText], ["consultor", "Consultor IA", Bot],
+  ["supervisores", "Supervisores", UserCheck],
 ];
 
 export default function App() {
@@ -5055,6 +5217,7 @@ export default function App() {
           {view === "senalizacion" && <Senalizacion />}
           {view === "autoservicio" && <Autoservicio staff={staff} />}
           {view === "consultor" && <Consultor />}
+          {view === "supervisores" && <SupervisoresPanel token={token} />}
         </main>
       </div>
       <FloatingAIAssistant view={view} staff={staff} solicitudes={solicitudes} attendance={attendance} token={token} go={setView} />

@@ -120,6 +120,11 @@ model AdminUser {
   phone        String?
   role         AdminRole @default(HR_MANAGER)
 
+  // Solo relevante para AREA_MANAGER (Supervisor Shell) — resuelve el
+  // equipo del supervisor junto con employees.supervisor_name. Ver
+  // apps/api/src/routes/supervisor.ts.
+  assignedDepartment String?
+
   // 2FA (fase 2)
   totpSecret   String?
   totpEnabled  Boolean @default(false)
