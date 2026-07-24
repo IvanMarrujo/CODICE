@@ -26,6 +26,13 @@ export interface EmployeeUpsertRow {
   bank_name?:     string
   bank_clabe?:    string
   notes?:         string
+  // Conectores "vivos" (Runa/Worky/Buk/Factorial — ver apps/api/src/connectors/{runa,worky,buk,factorial})
+  // y cualquier conector futuro con estos datos. Ningún conector de archivo
+  // (Excel/CFDI/DBF) los trae hoy, pero viven en `employees` desde siempre
+  // (ver rutas manuales en routes/employees.ts) — solo faltaban en esta whitelist.
+  email?:          string
+  phone?:          string
+  supervisor_name?: string
   customFields?:  Record<string, string> // ver upsertEmployee: se mergea (no sobreescribe) en employees.custom_fields
 }
 

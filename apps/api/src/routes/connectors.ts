@@ -256,6 +256,8 @@ export const WRITABLE_EMPLOYEE_COLUMNS: (keyof EmployeeUpsertRow)[] = [
   'seniority_years',
   'department', 'position', 'plant', 'shift', 'hire_date',
   'contract_type', 'status', 'employee_code', 'bank_name', 'bank_clabe', 'notes',
+  // Conectores "vivos" (Runa/Worky/Buk/Factorial) — ver common.ts.
+  'email', 'phone', 'supervisor_name',
 ]
 
 // ── Mapeo de columnas guardado por tenant + tipo de fuente ──────

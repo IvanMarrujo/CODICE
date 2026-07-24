@@ -50,6 +50,14 @@ import { startGamificationDaily } from './jobs/gamificationDaily'
 import zktecoWebhookRoutes from './routes/zktecoWebhook'
 import deviceRoutes from './routes/devices'
 import supervisorRoutes from './routes/supervisor'
+import runaRoutes, { runRunaSync } from './routes/runa'
+import workyRoutes, { runWorkySync } from './routes/worky'
+import bukRoutes, { runBukSync } from './routes/buk'
+import factorialRoutes, { runFactorialSync } from './routes/factorial'
+import { startRunaSyncWorker } from './jobs/runaSyncQueue'
+import { startWorkySyncWorker } from './jobs/workySyncQueue'
+import { startBukSyncWorker } from './jobs/bukSyncQueue'
+import { startFactorialSyncWorker } from './jobs/factorialSyncQueue'
 
 const PORT = process.env.API_PORT || 3001
 
@@ -149,6 +157,10 @@ app.use('/api/news',       newsRoutes)
 app.use('/api/devices',    deviceRoutes)
 app.use('/api/mentions',   mentionRoutes)
 app.use('/api/supervisor', supervisorRoutes)
+app.use('/api/connectors/runa',       runaRoutes)
+app.use('/api/connectors/worky',      workyRoutes)
+app.use('/api/connectors/buk',        bukRoutes)
+app.use('/api/connectors/factorial',  factorialRoutes)
 
 // Auspex (solo SUPER_ADMIN)
 app.use('/api/auspex', auspexRoutes)
@@ -173,6 +185,12 @@ attachAgentWebSocket(server, io)
 
 // ── Auto-sync (BullMQ, in-process) ──────────────────────────
 startAutoSyncWorker(io, runReloadForSource)
+
+// ── Conectores LATAM (Runa/Worky/Buk/Factorial) sync (BullMQ, in-process, on-demand) ──
+startRunaSyncWorker(io, runRunaSync)
+startWorkySyncWorker(io, runWorkySync)
+startBukSyncWorker(io, runBukSync)
+startFactorialSyncWorker(io, runFactorialSync)
 
 // ── Digest diario 8am — cursos obligatorios pendientes ───────
 startDailyCourseDigest()
