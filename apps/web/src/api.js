@@ -685,3 +685,71 @@ export function odooSync(token) {
 export function odooDisconnect(token) {
   return authedFetchJSON(token, `/api/connectors/odoo/disconnect`, "DELETE");
 }
+
+// ── Conectores LATAM (Runa HR, Worky, Buk, Factorial) — conectores "vivos"
+// (sin archivo, API en cada sync) — mismo patrón de 5 endpoints para los 4,
+// solo cambia el prefijo de ruta. Buk además manda `country` en connect().
+
+export function runaStatus(token) {
+  return authedFetch(token, `/api/connectors/runa/status`);
+}
+export function runaConnect(token, payload) {
+  return authedFetchJSON(token, `/api/connectors/runa/connect`, "POST", payload);
+}
+export function runaPreview(token) {
+  return authedFetch(token, `/api/connectors/runa/preview`);
+}
+export function runaSync(token) {
+  return authedFetchJSON(token, `/api/connectors/runa/sync`, "POST");
+}
+export function runaDisconnect(token) {
+  return authedFetchJSON(token, `/api/connectors/runa/disconnect`, "DELETE");
+}
+
+export function workyStatus(token) {
+  return authedFetch(token, `/api/connectors/worky/status`);
+}
+export function workyConnect(token, payload) {
+  return authedFetchJSON(token, `/api/connectors/worky/connect`, "POST", payload);
+}
+export function workyPreview(token) {
+  return authedFetch(token, `/api/connectors/worky/preview`);
+}
+export function workySync(token) {
+  return authedFetchJSON(token, `/api/connectors/worky/sync`, "POST");
+}
+export function workyDisconnect(token) {
+  return authedFetchJSON(token, `/api/connectors/worky/disconnect`, "DELETE");
+}
+
+export function bukStatus(token) {
+  return authedFetch(token, `/api/connectors/buk/status`);
+}
+export function bukConnect(token, payload) {
+  return authedFetchJSON(token, `/api/connectors/buk/connect`, "POST", payload);
+}
+export function bukPreview(token) {
+  return authedFetch(token, `/api/connectors/buk/preview`);
+}
+export function bukSync(token) {
+  return authedFetchJSON(token, `/api/connectors/buk/sync`, "POST");
+}
+export function bukDisconnect(token) {
+  return authedFetchJSON(token, `/api/connectors/buk/disconnect`, "DELETE");
+}
+
+export function factorialStatus(token) {
+  return authedFetch(token, `/api/connectors/factorial/status`);
+}
+export function factorialConnect(token, payload) {
+  return authedFetchJSON(token, `/api/connectors/factorial/connect`, "POST", payload);
+}
+export function factorialPreview(token) {
+  return authedFetch(token, `/api/connectors/factorial/preview`);
+}
+export function factorialSync(token) {
+  return authedFetchJSON(token, `/api/connectors/factorial/sync`, "POST");
+}
+export function factorialDisconnect(token) {
+  return authedFetchJSON(token, `/api/connectors/factorial/disconnect`, "DELETE");
+}
