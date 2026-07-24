@@ -30,6 +30,7 @@ import actaRoutes, { actaPublicRoutes } from './routes/actas'
 import connectorRoutes, { runReloadForSource } from './routes/connectors'
 import zohoRoutes, { runZohoSync } from './routes/zoho'
 import mondayRoutes, { runMondaySync } from './routes/monday'
+import odooRoutes, { runOdooSync } from './routes/odoo'
 import aiRoutes         from './routes/ai'
 import signageRoutes    from './routes/signage'
 import notificationRoutes from './routes/notifications'
@@ -39,6 +40,7 @@ import auspexRoutes     from './routes/auspex'    // master cockpit (Auspex)
 import { startAutoSyncWorker } from './jobs/autoSyncQueue'
 import { startZohoSyncWorker } from './jobs/zohoSyncQueue'
 import { startMondaySyncWorker } from './jobs/mondaySyncQueue'
+import { startOdooSyncWorker } from './jobs/odooSyncQueue'
 import { setIO } from './lib/syncEmitter'
 import { attachAgentWebSocket } from './lib/agentWs'
 import webhookRoutes from './routes/webhook'
@@ -143,6 +145,7 @@ app.use('/api/actas',      actaRoutes)
 app.use('/api/connectors', connectorRoutes)
 app.use('/api/connectors/zoho', zohoRoutes)
 app.use('/api/connectors/monday', mondayRoutes)
+app.use('/api/connectors/odoo', odooRoutes)
 app.use('/api/ai',         aiRoutes)
 app.use('/api/signage',    signageRoutes)
 app.use('/api/notifications', notificationRoutes)
@@ -185,6 +188,9 @@ startZohoSyncWorker(io, runZohoSync)
 
 // ── Monday.com sync (BullMQ, in-process, on-demand) ──────────
 startMondaySyncWorker(io, runMondaySync)
+
+// ── Odoo sync (BullMQ, in-process, on-demand) ────────────────
+startOdooSyncWorker(io, runOdooSync)
 
 // ── Digest diario 8am — cursos obligatorios pendientes ───────
 startDailyCourseDigest()

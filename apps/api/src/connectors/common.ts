@@ -26,10 +26,10 @@ export interface EmployeeUpsertRow {
   bank_name?:     string
   bank_clabe?:    string
   notes?:         string
-  // Zoho People (y cualquier conector futuro con estos datos) — ver
-  // connectors/zoho/zohoConnector.ts. Ningún conector de archivo (Excel/CFDI/
-  // DBF) los trae hoy, pero viven en `employees` desde siempre (ver rutas
-  // manuales en routes/employees.ts) — solo faltaban en esta whitelist.
+  // Zoho/Monday/Odoo (conectores "vivos" — ver connectors/{zoho,monday,odoo}/
+  // *Connector.ts). Ningún conector de archivo (Excel/CFDI/DBF) los trae hoy,
+  // pero viven en `employees` desde siempre (ver rutas manuales en
+  // routes/employees.ts) — solo faltaban en esta whitelist.
   email?:          string
   phone?:          string
   supervisor_name?: string

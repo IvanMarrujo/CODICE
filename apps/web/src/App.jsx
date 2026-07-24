@@ -41,6 +41,7 @@ import {
   fetchActas, fetchActa, createActa, fetchActaPdf, notifyActaSigner,
   zohoStatus, zohoConnect, zohoPreview, zohoSync, zohoDisconnect,
   mondayBoards, mondayConnect, mondayStatus, mondayPreview, mondaySync, mondayDisconnect,
+  odooConnect, odooStatus, odooPreview, odooSync, odooDisconnect,
 } from "./api.js";
 
 // Credenciales de auto-login del cockpit admin (tenant único GFP). Vienen de
@@ -2892,10 +2893,12 @@ function ResultStep({ result, err, isExcel, onClose }) {
 const LIVE_CONNECTOR_SYNC = {
   ZOHO: zohoSync,
   MONDAY: mondaySync,
+  ODOO: odooSync,
 };
 const LIVE_CONNECTOR_LABELS = {
   ZOHO: "Zoho People",
   MONDAY: "Monday.com",
+  ODOO: "Odoo",
 };
 
 // `sourceType`: 'EXCEL' | 'CFDI' | cualquier key de LIVE_CONNECTOR_SYNC
@@ -2926,10 +2929,10 @@ function ModoAWizard({ token, socket, onClose, onImported, sourceType = "EXCEL",
   // tenants que ya lo usan. El valor 'EXCEL' del prop queda reservado para
   // un futuro punto de entrada distinto al wizard de Modo A de hoy.
   const backendSourceType = sourceType === "EXCEL" ? "EXCEL_GENERIC" : sourceType;
-  // Conectores "vivos" (API en cada sync, sin archivo) — Monday.com hoy,
-  // cualquier futuro conector similar mañana: comparten el mismo patrón de
-  // /sync asíncrono (BullMQ) + resultado por Socket.io en vez de la
-  // respuesta HTTP síncrona que sí tienen Excel/CFDI.
+  // Conectores "vivos" (API en cada sync, sin archivo) — Odoo, Monday,
+  // Zoho, cualquier futuro similar: comparten el mismo patrón de /sync
+  // asíncrono (BullMQ) + resultado por Socket.io en vez de la respuesta
+  // HTTP síncrona que sí tienen Excel/CFDI.
   const isLiveConnector = sourceType !== "EXCEL" && sourceType !== "CFDI";
 
   const syncLog = useSyncLog(token);
@@ -3000,7 +3003,7 @@ function ModoAWizard({ token, socket, onClose, onImported, sourceType = "EXCEL",
   // mostrando los datos de la auto-detección inicial, de antes de que el
   // usuario mapeara nada a mano (bug encontrado en prueba manual del wizard).
   const goToPreview = async () => {
-    // Conectores vivos (Zoho, Monday, etc.): el mapeo ya viene resuelto en
+    // Conectores vivos (Odoo, Monday, Zoho): el mapeo ya viene resuelto en
     // `preview` (traído por el padre vía externalData) — no hay archivo que
     // re-parsear ni overrides que confirmar contra un backend de preview.
     if (!isExcel || isLiveConnector) { setStep(3); return; }
@@ -4033,6 +4036,70 @@ function MondayConnectModal({ token, onClose, onConnected }) {
   );
 }
 
+// ── Odoo ERP — conector "vivo" (sin archivo, JSON-RPC en cada sync) ──
+
+function OdooConnectModal({ token, onClose, onConnected }) {
+  const [form, setForm] = useState({ url: "", database: "", username: "", password: "" });
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null); // { ok: true, employeeCount } | { ok: false, message }
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const canSubmit = form.url.trim() && form.database.trim() && form.username.trim() && form.password.trim();
+
+  const test = async () => {
+    setBusy(true);
+    setResult(null);
+    try {
+      const res = await odooConnect(token, form);
+      setResult({ ok: true, employeeCount: res.employeeCount });
+    } catch (e) {
+      setResult({ ok: false, message: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="glass" style={{ width: "min(440px,92vw)", padding: 24 }} onClick={(e) => e.stopPropagation()}>
+        <div className="row" style={{ justifyContent: "space-between", marginBottom: 18 }}>
+          <span style={{ fontWeight: 600, fontSize: 15 }}>Conectar Odoo</span>
+          <X size={16} className="handle" style={{ cursor: "pointer" }} onClick={onClose} />
+        </div>
+
+        <label className="fld">URL de Odoo</label>
+        <input className="input" style={{ marginBottom: 12, width: "100%" }} placeholder="https://miempresa.odoo.com" value={form.url} onChange={set("url")} />
+
+        <label className="fld">Base de datos</label>
+        <input className="input" style={{ marginBottom: 12, width: "100%" }} value={form.database} onChange={set("database")} />
+
+        <label className="fld">Usuario</label>
+        <input className="input" style={{ marginBottom: 12, width: "100%" }} value={form.username} onChange={set("username")} />
+
+        <label className="fld">Contraseña</label>
+        <input className="input" type="password" style={{ marginBottom: 8, width: "100%" }} value={form.password} onChange={set("password")} />
+
+        <div className="muted2" style={{ fontSize: 11.5, marginBottom: 4 }}>Usa las mismas credenciales con las que entras a Odoo.</div>
+        <div className="muted2" style={{ fontSize: 11.5, marginBottom: 16 }}>CÓDICE se conecta a Odoo sin reemplazarlo.</div>
+
+        {result && (
+          <div className="glass-2" style={{ padding: "9px 12px", marginBottom: 14, borderLeft: `3px solid ${result.ok ? "var(--emerald)" : "var(--rose)"}` }}>
+            <span style={{ fontSize: 12.5, color: result.ok ? "var(--emerald)" : "var(--rose)" }}>
+              {result.ok ? `✅ Conectado · ${result.employeeCount} empleados en Odoo` : `❌ ${result.message}`}
+            </span>
+          </div>
+        )}
+
+        <div className="row" style={{ gap: 10, justifyContent: "flex-end" }}>
+          <button className="btn" onClick={onClose}>Cancelar</button>
+          {result?.ok
+            ? <button className="btn btn-accent" onClick={onConnected}>Listo</button>
+            : <button className="btn btn-accent" disabled={!canSubmit || busy} onClick={test}>{busy ? "Probando…" : "Probar conexión"}</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ZohoConnectorCard({ token, refreshKey, onSync }) {
   const [status, setStatus] = useState({ state: "loading", data: null });
   const [showModal, setShowModal] = useState(false);
@@ -4147,11 +4214,69 @@ function MondayConnectorCard({ token, refreshKey, onSync }) {
   );
 }
 
+function OdooConnectorCard({ token, refreshKey, onSync }) {
+  const [status, setStatus] = useState({ state: "loading", data: null });
+  const [showModal, setShowModal] = useState(false);
+
+  const reload = useCallback(() => {
+    odooStatus(token)
+      .then((data) => setStatus({ state: "ready", data }))
+      .catch(() => setStatus({ state: "ready", data: { connected: false, lastSync: null, employeeCount: 0 } }));
+  }, [token]);
+  useEffect(() => { reload(); }, [reload, refreshKey]);
+
+  const disconnect = async () => {
+    try {
+      await odooDisconnect(token);
+      toast("Odoo desconectado");
+      reload();
+    } catch (e) {
+      toast(e.message, "no");
+    }
+  };
+
+  if (status.state === "loading") return null;
+  const { connected, lastSync, employeeCount } = status.data;
+
+  return (
+    <>
+      <div className="glass" style={{ padding: 16, width: 300 }}>
+        <div className="row" style={{ gap: 8, marginBottom: 8 }}>
+          <span style={{ fontSize: 17 }}>{connected ? "✅" : "🟡"}</span>
+          <span style={{ fontWeight: 600, fontSize: 14 }}>Odoo ERP</span>
+          {connected && <span className="chip" style={{ color: "var(--emerald)", marginLeft: "auto" }}>CONECTADO</span>}
+        </div>
+        {connected ? (
+          <>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+              {employeeCount} empleado{employeeCount === 1 ? "" : "s"} · Última sync: {lastSync ? timeAgo(lastSync) : "nunca"}
+            </div>
+            <div className="row" style={{ gap: 7, flexWrap: "wrap" }}>
+              <button className="btn btn-sm" onClick={onSync}><RefreshCw size={12} />Sincronizar</button>
+              <button className="btn btn-sm" onClick={() => setShowModal(true)}>Configurar</button>
+              <button className="btn btn-sm" onClick={disconnect}><Trash2 size={12} />Desconectar</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>Conecta tu instancia de Odoo</div>
+            <button className="btn btn-sm" style={{ width: "100%", justifyContent: "center" }} onClick={() => setShowModal(true)}>Configurar conexión</button>
+          </>
+        )}
+      </div>
+      {showModal && (
+        <OdooConnectModal token={token} onClose={() => setShowModal(false)} onConnected={() => { setShowModal(false); reload(); }} />
+      )}
+    </>
+  );
+}
+
 function Conectores({ token, socket, tenantId }) {
   const [refreshKey, setRefreshKey] = useState(0);
   const [activeMode, setActiveMode] = useState(null); // null | "A" | "B" | "C"
   const [zohoWizardData, setZohoWizardData] = useState(null); // preview del wizard | null
   const [mondayWizardData, setMondayWizardData] = useState(null); // preview del wizard | null
+  const [odooWizardData, setOdooWizardData] = useState(null); // preview del wizard | null
   const bump = () => setRefreshKey((k) => k + 1);
 
   const openZohoWizard = async () => {
@@ -4167,6 +4292,15 @@ function Conectores({ token, socket, tenantId }) {
     try {
       const data = await mondayPreview(token);
       setMondayWizardData(data);
+    } catch (e) {
+      toast(e.message, "no");
+    }
+  };
+
+  const openOdooWizard = async () => {
+    try {
+      const data = await odooPreview(token);
+      setOdooWizardData(data);
     } catch (e) {
       toast(e.message, "no");
     }
@@ -4195,6 +4329,7 @@ function Conectores({ token, socket, tenantId }) {
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
           <ZohoConnectorCard token={token} refreshKey={refreshKey} onSync={openZohoWizard} />
           <MondayConnectorCard token={token} refreshKey={refreshKey} onSync={openMondayWizard} />
+          <OdooConnectorCard token={token} refreshKey={refreshKey} onSync={openOdooWizard} />
         </div>
       </div>
 
@@ -4225,6 +4360,12 @@ function Conectores({ token, socket, tenantId }) {
         <ModoAWizard
           token={token} socket={socket} sourceType="MONDAY" externalData={mondayWizardData}
           onClose={() => setMondayWizardData(null)} onImported={bump}
+        />
+      )}
+      {odooWizardData && (
+        <ModoAWizard
+          token={token} socket={socket} sourceType="ODOO" externalData={odooWizardData}
+          onClose={() => setOdooWizardData(null)} onImported={bump}
         />
       )}
     </div>
