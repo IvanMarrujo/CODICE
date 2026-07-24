@@ -600,3 +600,30 @@ export function fetchCourses(token) {
 export function assignCourseBulk(token, courseId, employeeIds) {
   return authedFetchJSON(token, `/api/courses/${courseId}/assign-bulk`, "POST", { employeeIds });
 }
+
+// ── Zoho People — conector "vivo" (sin archivo, API en cada sync) ────
+
+export function zohoStatus(token) {
+  return authedFetch(token, `/api/connectors/zoho/status`);
+}
+
+export function zohoConnect(token, payload) {
+  return authedFetchJSON(token, `/api/connectors/zoho/connect`, "POST", payload);
+}
+
+// Dry-run: trae TODOS los empleados de Zoho ya mapeados (el mapeo es fijo,
+// ver zohoConnector.ts) — misma forma que previewExcel para reusar el wizard
+// (Mapeo/Vista previa/Confirmar) tal cual, vía sourceType="ZOHO"/externalData.
+export function zohoPreview(token) {
+  return authedFetch(token, `/api/connectors/zoho/preview`);
+}
+
+// Encola el sync real (BullMQ) — el resultado llega por Socket.io
+// ('sync:complete'/'sync:error'), no en la respuesta de este POST.
+export function zohoSync(token) {
+  return authedFetchJSON(token, `/api/connectors/zoho/sync`, "POST");
+}
+
+export function zohoDisconnect(token) {
+  return authedFetchJSON(token, `/api/connectors/zoho/disconnect`, "DELETE");
+}

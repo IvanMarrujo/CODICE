@@ -49,6 +49,9 @@ export interface ParsedEmployeeRow {
   bank_name?:      string
   bank_clabe?:     string
   notes?:          string
+  email?:          string
+  phone?:          string
+  supervisor_name?: string
   payroll?:        ParsedPayrollFields  // presente solo si la fila trae columnas de nómina
   customFields?:   Record<string, string> // columnas marcadas "Crear campo personalizado" en el Step 3
 }
@@ -228,6 +231,9 @@ function mapRowValues(values: Partial<Record<CanonicalField, unknown>>, rowNumbe
   if (values.bank_name != null)     out.bank_name     = String(values.bank_name).trim()
   if (values.bank_clabe != null)    out.bank_clabe    = String(values.bank_clabe).trim()
   if (values.notes != null)         out.notes         = String(values.notes).trim()
+  if (values.email != null)         out.email         = String(values.email).trim()
+  if (values.phone != null)         out.phone         = String(values.phone).trim()
+  if (values.supervisor_name != null) out.supervisor_name = String(values.supervisor_name).trim()
 
   if (values.hire_date != null) {
     const d = parseDate(values.hire_date)

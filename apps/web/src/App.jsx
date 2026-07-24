@@ -39,6 +39,7 @@ import {
   fetchZktecoDevices, registerZktecoDevice, deleteZktecoDevice,
   exportEmployeesCsv, fetchCourses, assignCourseBulk,
   fetchActas, fetchActa, createActa, fetchActaPdf, notifyActaSigner,
+  zohoStatus, zohoConnect, zohoPreview, zohoSync, zohoDisconnect,
 } from "./api.js";
 
 // Credenciales de auto-login del cockpit admin (tenant único GFP). Vienen de
@@ -2309,6 +2310,7 @@ const CODICE_FIELDS = [
   ["plant", "Planta"], ["shift", "Turno"], ["hire_date", "Fecha de ingreso"],
   ["contract_type", "Tipo de contrato"], ["status", "Estatus"],
   ["bank_name", "Banco"], ["bank_clabe", "CLABE"], ["notes", "Notas"],
+  ["email", "Correo electrónico"], ["phone", "Teléfono"], ["supervisor_name", "Supervisor"],
 ];
 
 // RFC o Clave de empleado — al menos uno debe estar mapeado para continuar
@@ -2921,6 +2923,23 @@ function ModoAWizard({ token, socket, onClose, onImported, sourceType = "EXCEL",
     return () => socket.off("sync:progress", handler);
   }, [socket, step]);
 
+  // Zoho no sube archivo: /sync solo encola el job (BullMQ) y regresa de
+  // inmediato — el resultado real llega por estos eventos de socket, no en
+  // la respuesta HTTP (a diferencia de Excel/CFDI, que sí resuelven la
+  // promesa con el resultado final porque corren sincrónico en el request).
+  useEffect(() => {
+    if (!socket || sourceType !== "ZOHO" || step !== 5) return;
+    const onComplete = (data) => {
+      setResult({ processed: data.processed, updated: data.updated, errors: data.errors || [] });
+      setStep(6);
+      onImported?.();
+    };
+    const onError = (data) => { setCommitErr(data.error); setStep(6); };
+    socket.on("sync:complete", onComplete);
+    socket.on("sync:error", onError);
+    return () => { socket.off("sync:complete", onComplete); socket.off("sync:error", onError); };
+  }, [socket, sourceType, step]);
+
   const selectSystem = (sys) => { setSystem(sys); setPreviewErr(null); setStep(1); };
 
   const handleFiles = async (fileList) => {
@@ -2963,7 +2982,10 @@ function ModoAWizard({ token, socket, onClose, onImported, sourceType = "EXCEL",
   // mostrando los datos de la auto-detección inicial, de antes de que el
   // usuario mapeara nada a mano (bug encontrado en prueba manual del wizard).
   const goToPreview = async () => {
-    if (!isExcel) { setStep(3); return; }
+    // Zoho (y cualquier futuro sourceType con externalData): el mapeo es fijo
+    // — no hay overrides que confirmar ni archivo que re-parsear, la vista
+    // previa que ya trae `preview` es la definitiva.
+    if (!isExcel || sourceType === "ZOHO") { setStep(3); return; }
     setPreviewBusy(true);
     setPreviewErr(null);
     try {
@@ -2982,8 +3004,23 @@ function ModoAWizard({ token, socket, onClose, onImported, sourceType = "EXCEL",
 
   const confirmImport = async () => {
     setStep(5);
-    setProgress({ processed: 0, total: preview?.totalRows || files.length });
     setCommitErr(null);
+
+    // Zoho: no hay archivo que subir — /sync solo ENCOLA el job real
+    // (BullMQ) y regresa de inmediato; el resultado llega por Socket.io
+    // (ver useEffect de "sync:complete"/"sync:error" arriba).
+    if (sourceType === "ZOHO") {
+      setProgress({ processed: 0, total: preview?.totalRows || 0 });
+      try {
+        await zohoSync(token);
+      } catch (e) {
+        setCommitErr(e.message);
+        setStep(6);
+      }
+      return;
+    }
+
+    setProgress({ processed: 0, total: preview?.totalRows || files.length });
     try {
       const endpoint = system?.format === "cfdi" ? "/api/connectors/upload/cfdi" : "/api/connectors/upload/excel";
       let extraFields;
@@ -3002,8 +3039,11 @@ function ModoAWizard({ token, socket, onClose, onImported, sourceType = "EXCEL",
     }
   };
 
+  const wizardTitle = sourceType === "ZOHO" ? "Sincronizar Zoho People" : "Exportación manual";
+  const wizardSubtitle = sourceType === "ZOHO" ? "Zoho People · Mapeo e importación" : "MODO A · Configuración";
+
   return (
-    <ConfigPanel title="Exportación manual" subtitle="MODO A · Configuración" onClose={onClose} steps={MODO_A_STEPS} currentStep={step}>
+    <ConfigPanel title={wizardTitle} subtitle={wizardSubtitle} onClose={onClose} steps={MODO_A_STEPS} currentStep={step}>
       {step === 0 && (
         <div>
           <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>¿Qué sistema exporta el archivo?</div>
@@ -3032,7 +3072,7 @@ function ModoAWizard({ token, socket, onClose, onImported, sourceType = "EXCEL",
         <FieldMapperStep
           preview={preview} manualMap={manualMap} setManualMap={setManualMap}
           customFieldTypes={customFieldTypes} setCustomFieldTypes={setCustomFieldTypes}
-          onContinue={goToPreview} onBack={() => setStep(1)} busy={previewBusy} err={previewErr}
+          onContinue={goToPreview} onBack={() => externalData ? onClose() : setStep(1)} busy={previewBusy} err={previewErr}
         />
       )}
       {step === 3 && preview && (isExcel
@@ -3808,10 +3848,151 @@ function NdaDownloadButton({ token }) {
   );
 }
 
+// ── Zoho People — conector "vivo" (sin archivo, API en cada sync) ──
+
+const ZOHO_DATA_CENTERS = [
+  { id: "com", label: "zoho.com (Estados Unidos)" },
+  { id: "eu",  label: "zoho.eu (Europa)" },
+  { id: "in",  label: "zoho.in (India)" },
+];
+
+function ZohoConnectModal({ token, onClose, onConnected }) {
+  const [form, setForm] = useState({ dataCenter: "com", clientId: "", clientSecret: "", refreshToken: "" });
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null); // { ok: true, employeeCount } | { ok: false, message }
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const canSubmit = form.clientId.trim() && form.clientSecret.trim() && form.refreshToken.trim();
+
+  const test = async () => {
+    setBusy(true);
+    setResult(null);
+    try {
+      const res = await zohoConnect(token, form);
+      setResult({ ok: true, employeeCount: res.employeeCount });
+    } catch (e) {
+      setResult({ ok: false, message: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="glass" style={{ width: "min(440px,92vw)", padding: 24 }} onClick={(e) => e.stopPropagation()}>
+        <div className="row" style={{ justifyContent: "space-between", marginBottom: 18 }}>
+          <span style={{ fontWeight: 600, fontSize: 15 }}>Conectar Zoho People</span>
+          <X size={16} className="handle" style={{ cursor: "pointer" }} onClick={onClose} />
+        </div>
+
+        <label className="fld">Centro de datos</label>
+        <select className="select" style={{ marginBottom: 12, width: "100%" }} value={form.dataCenter} onChange={set("dataCenter")}>
+          {ZOHO_DATA_CENTERS.map((dc) => <option key={dc.id} value={dc.id}>{dc.label}</option>)}
+        </select>
+
+        <label className="fld">Client ID</label>
+        <input className="input" style={{ marginBottom: 12, width: "100%" }} value={form.clientId} onChange={set("clientId")} />
+
+        <label className="fld">Client Secret</label>
+        <input className="input" type="password" style={{ marginBottom: 12, width: "100%" }} value={form.clientSecret} onChange={set("clientSecret")} />
+
+        <label className="fld">Refresh Token</label>
+        <input className="input" type="password" style={{ marginBottom: 8, width: "100%" }} value={form.refreshToken} onChange={set("refreshToken")} />
+
+        <a href="https://www.zoho.com/people/api/oauth-steps.html" target="_blank" rel="noreferrer"
+          className="muted2" style={{ fontSize: 11.5, display: "inline-flex", alignItems: "center", gap: 4, marginBottom: 16 }}>
+          ¿Cómo obtener credenciales? <ExternalLink size={11} />
+        </a>
+
+        {result && (
+          <div className="glass-2" style={{ padding: "9px 12px", marginBottom: 14, borderLeft: `3px solid ${result.ok ? "var(--emerald)" : "var(--rose)"}` }}>
+            <span style={{ fontSize: 12.5, color: result.ok ? "var(--emerald)" : "var(--rose)" }}>
+              {result.ok ? `✅ Conectado · ${result.employeeCount} empleados en Zoho` : `❌ ${result.message}`}
+            </span>
+          </div>
+        )}
+
+        <div className="row" style={{ gap: 10, justifyContent: "flex-end" }}>
+          <button className="btn" onClick={onClose}>Cancelar</button>
+          {result?.ok
+            ? <button className="btn btn-accent" onClick={onConnected}>Listo</button>
+            : <button className="btn btn-accent" disabled={!canSubmit || busy} onClick={test}>{busy ? "Probando…" : "Probar conexión"}</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ZohoConnectorCard({ token, refreshKey, onSync }) {
+  const [status, setStatus] = useState({ state: "loading", data: null });
+  const [showModal, setShowModal] = useState(false);
+
+  const reload = useCallback(() => {
+    zohoStatus(token)
+      .then((data) => setStatus({ state: "ready", data }))
+      .catch(() => setStatus({ state: "ready", data: { connected: false, lastSync: null, employeeCount: 0 } }));
+  }, [token]);
+  useEffect(() => { reload(); }, [reload, refreshKey]);
+
+  const disconnect = async () => {
+    try {
+      await zohoDisconnect(token);
+      toast("Zoho People desconectado");
+      reload();
+    } catch (e) {
+      toast(e.message, "no");
+    }
+  };
+
+  if (status.state === "loading") return null;
+  const { connected, lastSync, employeeCount } = status.data;
+
+  return (
+    <>
+      <div className="glass" style={{ padding: 16, width: 300 }}>
+        <div className="row" style={{ gap: 8, marginBottom: 8 }}>
+          <span style={{ fontSize: 17 }}>{connected ? "✅" : "🟡"}</span>
+          <span style={{ fontWeight: 600, fontSize: 14 }}>Zoho People</span>
+          {connected && <span className="chip" style={{ color: "var(--emerald)", marginLeft: "auto" }}>CONECTADO</span>}
+        </div>
+        {connected ? (
+          <>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+              {employeeCount} empleado{employeeCount === 1 ? "" : "s"} · Última sync: {lastSync ? timeAgo(lastSync) : "nunca"}
+            </div>
+            <div className="row" style={{ gap: 7, flexWrap: "wrap" }}>
+              <button className="btn btn-sm" onClick={onSync}><RefreshCw size={12} />Sincronizar</button>
+              <button className="btn btn-sm" onClick={() => setShowModal(true)}>Configurar</button>
+              <button className="btn btn-sm" onClick={disconnect}><Trash2 size={12} />Desconectar</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>Importa tu plantilla desde Zoho HR</div>
+            <button className="btn btn-sm" style={{ width: "100%", justifyContent: "center" }} onClick={() => setShowModal(true)}>Configurar conexión</button>
+          </>
+        )}
+      </div>
+      {showModal && (
+        <ZohoConnectModal token={token} onClose={() => setShowModal(false)} onConnected={() => { setShowModal(false); reload(); }} />
+      )}
+    </>
+  );
+}
+
 function Conectores({ token, socket, tenantId }) {
   const [refreshKey, setRefreshKey] = useState(0);
   const [activeMode, setActiveMode] = useState(null); // null | "A" | "B" | "C"
+  const [zohoWizardData, setZohoWizardData] = useState(null); // preview del wizard | null
   const bump = () => setRefreshKey((k) => k + 1);
+
+  const openZohoWizard = async () => {
+    try {
+      const data = await zohoPreview(token);
+      setZohoWizardData(data);
+    } catch (e) {
+      toast(e.message, "no");
+    }
+  };
 
   return (
     <div className="fadein">
@@ -3831,6 +4012,14 @@ function Conectores({ token, socket, tenantId }) {
       <ConnectedSourcesPanel token={token} socket={socket} refreshKey={refreshKey} onChanged={bump} tenantId={tenantId} />
 
       <div style={{ marginTop: 30 }}>
+        <Eyebrow>Conectores disponibles</Eyebrow>
+        <div className="muted" style={{ fontSize: 12.5, margin: "4px 0 16px" }}>Sistemas de RH externos que CÓDICE sincroniza directamente</div>
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+          <ZohoConnectorCard token={token} refreshKey={refreshKey} onSync={openZohoWizard} />
+        </div>
+      </div>
+
+      <div style={{ marginTop: 30 }}>
         <Eyebrow>Modo de conexión</Eyebrow>
         <div className="muted" style={{ fontSize: 12.5, margin: "4px 0 16px" }}>Selecciona el método que corresponde a tu infraestructura actual</div>
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
@@ -3847,6 +4036,12 @@ function Conectores({ token, socket, tenantId }) {
       {activeMode === "A" && <ModoAWizard token={token} socket={socket} onClose={() => setActiveMode(null)} onImported={bump} />}
       {activeMode === "B" && <ModoBPanel onClose={() => setActiveMode(null)} />}
       {activeMode === "C" && <ModoCPanel onClose={() => setActiveMode(null)} />}
+      {zohoWizardData && (
+        <ModoAWizard
+          token={token} socket={socket} sourceType="ZOHO" externalData={zohoWizardData}
+          onClose={() => setZohoWizardData(null)} onImported={bump}
+        />
+      )}
     </div>
   );
 }
