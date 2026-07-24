@@ -28,6 +28,7 @@ import requestRoutes    from './routes/requests'
 import courseRoutes     from './routes/courses'
 import actaRoutes, { actaPublicRoutes } from './routes/actas'
 import connectorRoutes, { runReloadForSource } from './routes/connectors'
+import odooRoutes, { runOdooSync } from './routes/odoo'
 import aiRoutes         from './routes/ai'
 import signageRoutes    from './routes/signage'
 import notificationRoutes from './routes/notifications'
@@ -35,6 +36,7 @@ import attendanceRoutes from './routes/attendance'
 import adminRoutes      from './routes/admin'
 import auspexRoutes     from './routes/auspex'    // master cockpit (Auspex)
 import { startAutoSyncWorker } from './jobs/autoSyncQueue'
+import { startOdooSyncWorker } from './jobs/odooSyncQueue'
 import { setIO } from './lib/syncEmitter'
 import { attachAgentWebSocket } from './lib/agentWs'
 import webhookRoutes from './routes/webhook'
@@ -137,6 +139,7 @@ app.use('/api/requests',   requestRoutes)
 app.use('/api/courses',    courseRoutes)
 app.use('/api/actas',      actaRoutes)
 app.use('/api/connectors', connectorRoutes)
+app.use('/api/connectors/odoo', odooRoutes)
 app.use('/api/ai',         aiRoutes)
 app.use('/api/signage',    signageRoutes)
 app.use('/api/notifications', notificationRoutes)
@@ -173,6 +176,9 @@ attachAgentWebSocket(server, io)
 
 // ── Auto-sync (BullMQ, in-process) ──────────────────────────
 startAutoSyncWorker(io, runReloadForSource)
+
+// ── Odoo sync (BullMQ, in-process, on-demand) ────────────────
+startOdooSyncWorker(io, runOdooSync)
 
 // ── Digest diario 8am — cursos obligatorios pendientes ───────
 startDailyCourseDigest()

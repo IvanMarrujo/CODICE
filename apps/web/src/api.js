@@ -600,3 +600,29 @@ export function fetchCourses(token) {
 export function assignCourseBulk(token, courseId, employeeIds) {
   return authedFetchJSON(token, `/api/courses/${courseId}/assign-bulk`, "POST", { employeeIds });
 }
+
+// ── Odoo — conector "vivo" (sin archivo, JSON-RPC en cada sync) ────
+
+export function odooConnect(token, payload) {
+  return authedFetchJSON(token, `/api/connectors/odoo/connect`, "POST", payload);
+}
+
+export function odooStatus(token) {
+  return authedFetch(token, `/api/connectors/odoo/status`);
+}
+
+// Dry-run: trae TODOS los empleados de hr.employee ya mapeados (mapeo fijo,
+// ver ODOO_FIELD_MAP) — misma forma que previewExcel para reusar el wizard
+// (Mapeo/Vista previa/Confirmar) vía sourceType="ODOO"/externalData.
+export function odooPreview(token) {
+  return authedFetchJSON(token, `/api/connectors/odoo/preview`, "POST");
+}
+
+// Encola el sync real (BullMQ) — el resultado llega por Socket.io.
+export function odooSync(token) {
+  return authedFetchJSON(token, `/api/connectors/odoo/sync`, "POST");
+}
+
+export function odooDisconnect(token) {
+  return authedFetchJSON(token, `/api/connectors/odoo/disconnect`, "DELETE");
+}
