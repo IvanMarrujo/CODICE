@@ -3610,7 +3610,7 @@ function WhatsAppConnectionCard({ settings, onSaved }) {
   const [instanceId, setInstanceId] = useState("");
   const [tokenInput, setTokenInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const webhookUrl = `${import.meta.env.VITE_API_URL || "http://localhost:3001"}/api/webhook/whatsapp`;
+  const webhookUrl = `${import.meta.env.VITE_API_URL || "https://api.kodice.mx"}/api/webhook/whatsapp`;
 
   const copyUrl = () => {
     navigator.clipboard?.writeText(webhookUrl);
@@ -6096,7 +6096,7 @@ function RegisterDeviceForm({ token, onRegistered, onCancel }) {
 function DevicesPanel({ token }) {
   const { status, data, reload } = useZktecoDevices(token);
   const [showForm, setShowForm] = useState(false);
-  const serverHost = (import.meta.env.VITE_API_URL || "https://codice-api-production.up.railway.app").replace(/^https?:\/\//, "");
+  const serverHost = (import.meta.env.VITE_API_URL || "https://api.kodice.mx").replace(/^https?:\/\//, "");
 
   const copyConfig = () => {
     navigator.clipboard?.writeText(`Server: ${serverHost}\nPort: 443\nProtocolo: ADMS Push`);
@@ -6709,7 +6709,7 @@ export default function App() {
   // asistencia (y cualquier otro consumidor futuro de eventos en tiempo real).
   useEffect(() => {
     if (!tenantId) return;
-    const s = io(import.meta.env.VITE_API_URL || "http://localhost:3001");
+    const s = io(import.meta.env.VITE_API_URL || "https://api.kodice.mx");
     s.emit("join:tenant", tenantId);
     setSocket(s);
     return () => { s.disconnect(); setSocket(null); };
