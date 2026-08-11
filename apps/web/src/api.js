@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3001";
+const API_BASE = import.meta.env.VITE_API_URL || "https://api.kodice.mx";
 
 export async function login({ slug, email, password }) {
   const res = await fetch(`${API_BASE}/api/auth/login`, {
