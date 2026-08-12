@@ -13,6 +13,19 @@ export async function login({ slug, email, password }) {
   return res.json();
 }
 
+export async function logout(refreshToken) {
+  const res = await fetch(`${API_BASE}/api/auth/logout`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refreshToken }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Logout falló (${res.status})`);
+  }
+  return res.json();
+}
+
 export async function fetchEmployees(token) {
   // pageSize=100 truncaba Plantilla en exactamente 100 empleados sin importar
   // cuántos existieran realmente — no hay UI de "cargar más" en Plantilla,
