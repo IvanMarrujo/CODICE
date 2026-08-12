@@ -24,17 +24,17 @@ router.get('/', (_req, res) => res.json({ route: 'reports', status: 'ok' }))
 
 // ── Whitelists — la IA solo puede elegir de estos conjuntos ──────
 // groupBy (dimensión) → columna real de employees.
-const GROUP_COLS: Record<string, { col: string; label: string }> = {
-  department:    { col: 'department', label: 'Departamento' },
-  area:          { col: 'department', label: 'Área' },
-  turno:         { col: 'shift',      label: 'Turno' },
-  shift:         { col: 'shift',      label: 'Turno' },
-  planta:        { col: 'plant',      label: 'Planta' },
-  plant:         { col: 'plant',      label: 'Planta' },
-  status:        { col: 'status',     label: 'Estatus' },
-  estatus:       { col: 'status',     label: 'Estatus' },
-  contrato:      { col: 'contract_type', label: 'Tipo de contrato' },
-  contract_type: { col: 'contract_type', label: 'Tipo de contrato' },
+const GROUP_COLS: Record<string, { col: string; label: string; plural: string }> = {
+  department:    { col: 'department', label: 'Departamento', plural: 'Departamentos' },
+  area:          { col: 'department', label: 'Área', plural: 'Áreas' },
+  turno:         { col: 'shift',      label: 'Turno', plural: 'Turnos' },
+  shift:         { col: 'shift',      label: 'Turno', plural: 'Turnos' },
+  planta:        { col: 'plant',      label: 'Planta', plural: 'Plantas' },
+  plant:         { col: 'plant',      label: 'Planta', plural: 'Plantas' },
+  status:        { col: 'status',     label: 'Estatus', plural: 'Estatus' },
+  estatus:       { col: 'status',     label: 'Estatus', plural: 'Estatus' },
+  contrato:      { col: 'contract_type', label: 'Tipo de contrato', plural: 'Tipos de contrato' },
+  contract_type: { col: 'contract_type', label: 'Tipo de contrato', plural: 'Tipos de contrato' },
 }
 
 // metric → expresión de agregación + etiqueta + formato.
@@ -148,7 +148,7 @@ router.post('/generate', requireHR, async (req: Request, res: Response, next: Ne
 
     const summary = [
       { label: metric.kind === 'money' ? 'Total nómina' : metric.kind === 'years' ? 'Promedio global' : 'Total', value: metric.kind === 'years' && chartData.length ? Number((total / chartData.length).toFixed(1)) : total, kind: metric.kind },
-      { label: `${dim.label}s`, value: chartData.length, kind: 'count' },
+      { label: dim.plural, value: chartData.length, kind: 'count' },
       ...(chartData[0] ? [{ label: `Mayor: ${chartData[0].name}`, value: chartData[0].value, kind: metric.kind }] : []),
     ]
 
