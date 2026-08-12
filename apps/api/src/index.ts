@@ -67,11 +67,18 @@ import { startFactorialSyncWorker } from './jobs/factorialSyncQueue'
 
 const PORT = process.env.API_PORT || 3001
 
+// NEXT_PUBLIC_APP_URL admite una lista separada por comas (múltiples
+// dominios de frontend en producción, p.ej. apex + www + preview URL).
+const APP_ORIGINS = (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean)
+
 // ── Express app ──────────────────────────────────────────────
 const app    = express()
 const server = createServer(app)
 const io     = new SocketIO(server, {
-  cors: { origin: process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000', credentials: true }
+  cors: { origin: APP_ORIGINS, credentials: true }
 })
 
 // Adjuntar io al request para usarlo en handlers
@@ -91,8 +98,7 @@ const LAN_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d
 app.use(cors({
   origin(origin, callback) {
     if (!origin) return callback(null, true) // requests sin Origin (curl, health checks)
-    const configured = process.env.NEXT_PUBLIC_APP_URL
-    if (origin === configured || LAN_ORIGIN_RE.test(origin)) return callback(null, true)
+    if (APP_ORIGINS.includes(origin) || LAN_ORIGIN_RE.test(origin)) return callback(null, true)
     callback(new Error('Origen no permitido por CORS'))
   },
   credentials: true,
