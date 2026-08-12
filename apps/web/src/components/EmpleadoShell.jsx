@@ -18,7 +18,7 @@ let _empXpFlash = () => {};
 const empXpFlash = (payload) => _empXpFlash(payload);
 
 /* ============================================================
-   CÓDICE · Shell Colaborador — Fortune 500 redesign
+   KODICE · Shell Colaborador — Fortune 500 redesign
    Solo colaboradores. IA = árbol guiado (sin chat libre).
    Sin Capacitación, sin reporte de incidentes, sin "cambios y
    actualizaciones" — ver spec de la tarea.
@@ -521,7 +521,7 @@ const CSS = `
   --accent-blue:#2563eb; --accent-blue-bright:#4db8ff;
   --accent-green:#00c896; --accent-green-dim:rgba(0,200,150,.15);
   --accent-amber:#f5c518; --accent-red:#ef4444; --accent-white:#fff;
-  /* Alias explícitos de la identidad CÓDICE — mismos valores que los vars de arriba */
+  /* Alias explícitos de la identidad KODICE — mismos valores que los vars de arriba */
   --codice-ink:#020917;--codice-surface:#06142d;--codice-border:rgba(255,255,255,0.07);
   --codice-signal:#00c896;--codice-alert:#f5c518;--codice-data:#4db8ff;
   --codice-text:#e8f0fe;--codice-muted:rgba(232,240,254,0.45);
@@ -588,6 +588,12 @@ body{font-family:'DM Sans',system-ui,-apple-system,"Segoe UI",sans-serif}
 .emp-input,.emp-select,.emp-textarea{width:100%;font-size:13.5px;color:var(--text-primary);background:rgba(0,0,0,.3);
   border:1px solid var(--border-dim);border-radius:10px;padding:11px 12px;outline:none}
 .emp-input:focus,.emp-textarea:focus,.emp-select:focus{border-color:var(--accent-blue)}
+/* Evita el fondo blanco del autofill del navegador en el login oscuro */
+.emp-input:-webkit-autofill,.emp-input:-webkit-autofill:hover,.emp-input:-webkit-autofill:focus{
+  -webkit-text-fill-color:#f0f4ff;caret-color:#f0f4ff;
+  -webkit-box-shadow:0 0 0 1000px rgba(30,34,48,1) inset;
+  box-shadow:0 0 0 1000px rgba(30,34,48,1) inset;
+  transition:background-color 9999s ease-in-out 0s}
 .emp-label{display:block;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted);margin-bottom:6px;font-weight:600}
 
 .emp-badge{font-size:11px;font-weight:600;padding:3px 8px;border-radius:999px;border:1px solid transparent}
@@ -894,7 +900,7 @@ function LoginScreen({ onSuccess }) {
   return (
     <div className="emp-login">
       <div>
-        <div className="emp-login-logo">✦ CÓDICE</div>
+        <div className="emp-login-logo">✦ KODICE</div>
         <div className="emp-login-sub">Portal del Colaborador</div>
       </div>
       <form className="emp-login-form" onSubmit={submit}>
@@ -905,7 +911,7 @@ function LoginScreen({ onSuccess }) {
         />
         <label className="emp-label">Contraseña</label>
         <input
-          className="emp-input" style={{ marginBottom: 24 }} type="password" autoComplete="current-password"
+          className="emp-input" style={{ marginBottom: 24, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", color: "#f0f4ff" }} type="password" autoComplete="current-password"
           value={password} onChange={(e) => setPassword(e.target.value)}
         />
         <button type="submit" className="emp-btn-primary" style={{ opacity: loading ? 0.7 : undefined }} disabled={loading || !identifier || !password}>
@@ -954,7 +960,7 @@ function GreetScreen({ employee, onDismiss }) {
     >
       <div className="emp-greet-content">
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.6, delay: 0.2 }} className="emp-greet-logo">
-          ✦ CÓDICE
+          ✦ KODICE
         </motion.div>
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.6, delay: 0.5 }} className="emp-greet-name">
           {employee.first_name} {employee.last_name}
@@ -1683,7 +1689,7 @@ const AVISOS_PLACEHOLDER = [
   },
 ];
 
-// CÓDICE Radar publica avisos ALTA vía GET /api/news (ver lib/news.ts en el
+// KODICE Radar publica avisos ALTA vía GET /api/news (ver lib/news.ts en el
 // API) — se combinan con los estáticos de arriba. `urgency` en esos items es
 // 'alta'|'media'|'baja' (no un color CSS como en AVISOS_PLACEHOLDER), así que
 // se traduce aquí en el merge.
@@ -1713,6 +1719,12 @@ function useNews(token) {
 function AvisosView({ token }) {
   const [openId, setOpenId] = useState(null);
   const radarItems = useNews(token);
+  const [reglamento, setReglamento] = useState(null);
+  // Reglamento interno pineado — reflejo del documento subido por RH (Feature 5).
+  useEffect(() => {
+    if (!token) return;
+    apiFetch(token, "/api/lft/reglamento").then((r) => setReglamento(r.document)).catch(() => {});
+  }, [token]);
   const avisos = useMemo(
     () => [...radarItems, ...AVISOS_PLACEHOLDER].sort((a, b) => new Date(b.date) - new Date(a.date)),
     [radarItems]
@@ -1721,6 +1733,17 @@ function AvisosView({ token }) {
     <motion.div {...PAGE_FADE}>
       <Eyebrow>Avisos</Eyebrow>
       <div className="emp-h1">Comunicados de la empresa</div>
+      {reglamento && (
+        <div className="emp-glass emp-card" style={{ borderLeft: "3px solid var(--accent-blue-bright, #4db8ff)" }}>
+          <div className="emp-row" style={{ justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>📋 Reglamento Interno</div>
+            {reglamento.archivo_url && String(reglamento.archivo_url).startsWith("http")
+              ? <a href={reglamento.archivo_url} target="_blank" rel="noreferrer" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--accent-blue-bright, #4db8ff)" }}>Ver documento →</a>
+              : <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--accent-blue-bright, #4db8ff)" }}>Ver documento →</span>}
+          </div>
+          <div className="emp-muted" style={{ fontSize: 12, marginTop: 4 }}>{reglamento.nombre} · documento fijado por RH</div>
+        </div>
+      )}
       {avisos.map((a, index) => {
         const isOpen = openId === a.id;
         return (
@@ -2593,7 +2616,7 @@ export function ActaFirmaView({ token }) {
       <style>{CSS}</style>
       <div className="emp-bgwash" />
       <div className="acta-firma-wrap">
-        <div className="acta-firma-logo">✦ CÓDICE</div>
+        <div className="acta-firma-logo">✦ KODICE</div>
 
         {stage === "loading" && (
           <div className="acta-firma-card" style={{ textAlign: "center" }}>
@@ -2839,7 +2862,7 @@ export default function EmpleadoShell() {
       {stage === "ready" && !showGreet && employee && (
         <div className="emp-app">
           <div className="emp-topbar">
-            <span className="emp-topbar-brand">✦ CÓDICE</span>
+            <span className="emp-topbar-brand">✦ KODICE</span>
             <span className="emp-topbar-name">{employee.first_name}</span>
             <span className="emp-topbar-bell">
               <Bell size={18} />

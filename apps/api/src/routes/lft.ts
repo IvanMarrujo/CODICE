@@ -4,13 +4,26 @@
 // Sin DB, sin auth — montadas antes del pipeline autenticado.
 // ============================================================
 
-import { Router, Request, Response, NextFunction } from 'express'
+import { Router, Request, Response, NextFunction, RequestHandler } from 'express'
 import { z } from 'zod'
+import multer from 'multer'
+import * as path from 'path'
+import * as crypto from 'crypto'
+import Anthropic from '@anthropic-ai/sdk'
 import { AppError } from '../lib/errors'
-import { authMiddleware } from '../middleware/auth'
+import { authMiddleware, requireHR, requireEmployee } from '../middleware/auth'
 import { tenantMiddleware } from '../middleware/tenant'
+import { saveFile } from '../lib/storage'
 
 const router = Router()
+
+// Pipeline autenticado inline para las rutas de Feature 5 (este router se
+// monta en la sección pública; las calculadoras de arriba no llevan auth,
+// pero machotes/reglamento/separación sí tocan la DB del tenant).
+const authed = [authMiddleware, tenantMiddleware] as const
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const AI_MODEL  = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5'
 
 const round2 = (n: number) => Math.round(n * 100) / 100
 
@@ -208,6 +221,295 @@ router.get('/jornada', (req: Request, res: Response, next: NextFunction) => {
     const { year } = jornadaSchema.parse(req.query)
     if (year) return res.json({ year, horas: horasJornada(year) })
     res.json({ schedule: JORNADA_SCHEDULE })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ============================================================
+// Feature 5 · MÓDULO LFT + CARTA DE SALIDA
+// ============================================================
+
+function stripJsonFences(s: string): string {
+  return s.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
+}
+
+const DOC_EXT = new Set(['.pdf', '.docx'])
+const DOC_MIME: Record<string, string> = {
+  '.pdf':  'application/pdf',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+}
+const docUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase()
+    if (!DOC_EXT.has(ext)) return cb(new AppError(400, 'Solo se aceptan PDF o DOCX'))
+    cb(null, true)
+  },
+}).single('file')
+function handleDocUpload(req: Request, res: Response, next: NextFunction) {
+  (docUpload as RequestHandler)(req, res, (err: any) => {
+    if (!err) return next()
+    if (err instanceof multer.MulterError) {
+      return next(new AppError(400, err.code === 'LIMIT_FILE_SIZE' ? 'El archivo supera 10MB' : err.message))
+    }
+    next(err)
+  })
+}
+
+// ── REGLAMENTO INTERNO ───────────────────────────────────────
+// POST sube y fija el reglamento a nivel tenant; GET lo expone (también al
+// colaborador, para reflejarlo en Avisos del EmpleadoShell).
+
+router.post('/reglamento', ...authed, requireHR, handleDocUpload, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tenantId = req.tenant.id
+    const file = req.file as Express.Multer.File | undefined
+    if (!file) throw new AppError(400, 'No se subió ningún archivo')
+    const ext = path.extname(file.originalname).toLowerCase()
+    const key = `${tenantId}/reglamento_interno${ext}`
+    await saveFile(key, file.buffer, DOC_MIME[ext] || file.mimetype, 'tenant-docs')
+
+    const rows = await req.tenantDb.$queryRaw<any[]>`
+      INSERT INTO tenant_documents (tenant_id, type, nombre, archivo_url, mime_type, uploaded_by)
+      VALUES (${tenantId}, 'reglamento_interno', ${file.originalname}, ${key}, ${DOC_MIME[ext] || file.mimetype}, ${req.jwt.email})
+      ON CONFLICT (tenant_id, type) DO UPDATE
+        SET nombre = EXCLUDED.nombre, archivo_url = EXCLUDED.archivo_url,
+            mime_type = EXCLUDED.mime_type, uploaded_by = EXCLUDED.uploaded_by, created_at = NOW()
+      RETURNING *
+    `
+    res.status(201).json({ document: rows[0] })
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.get('/reglamento', ...authed, requireEmployee, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const rows = await req.tenantDb.$queryRaw<any[]>`
+      SELECT * FROM tenant_documents WHERE tenant_id = ${req.tenant.id} AND type = 'reglamento_interno' LIMIT 1
+    `
+    res.json({ document: rows[0] || null })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── MACHOTES DE CARTA DE SALIDA (exit_letter_templates) ──────
+
+const EXIT_SYSTEM_PROMPT = `Eres experto en derecho laboral mexicano. Analiza esta carta de salida/machote y extrae:
+- Tipo (renuncia | despido_justificado | despido_injustificado | mutuo_acuerdo)
+- Disposiciones o cláusulas especiales (lista)
+- Campos variables (ej: {NOMBRE}, {FECHA})
+Responde ONLY JSON:
+{ "tipo": string, "disposicionesEspeciales": string[], "camposVariables": string[], "resumen": string }`
+
+async function analyzeExitLetter(buffer: Buffer, ext: string, filename: string) {
+  if (ext !== '.pdf') return null
+  const resp = await anthropic.beta.messages.create({
+    model: AI_MODEL,
+    max_tokens: 1200,
+    system: EXIT_SYSTEM_PROMPT,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') } },
+        { type: 'text', text: `Analiza esta carta de salida: ${filename}` },
+      ],
+    }],
+  })
+  const block = resp.content.find((b: any) => b.type === 'text') as { text: string } | undefined
+  if (!block) return null
+  try { return JSON.parse(stripJsonFences(block.text)) } catch { return null }
+}
+
+router.post('/exit-letters/upload', ...authed, requireHR, handleDocUpload, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tenantId = req.tenant.id
+    const file = req.file as Express.Multer.File | undefined
+    if (!file) throw new AppError(400, 'No se subió ningún archivo')
+    const ext = path.extname(file.originalname).toLowerCase()
+    const key = `${tenantId}/exit/${crypto.randomUUID()}${ext}`
+    await saveFile(key, file.buffer, DOC_MIME[ext] || file.mimetype, 'exit-letters')
+
+    let analysis: any = null
+    try { analysis = await analyzeExitLetter(file.buffer, ext, file.originalname) }
+    catch (e: any) { console.error('[lft] análisis carta salida falló:', e.message) }
+
+    const rows = await req.tenantDb.$queryRaw<any[]>`
+      INSERT INTO exit_letter_templates (tenant_id, nombre, tipo, disposiciones, archivo_url, ia_analysis, created_by)
+      VALUES (${tenantId}, ${file.originalname.replace(/\.(pdf|docx)$/i, '')}, ${analysis?.tipo || null},
+              ${(analysis?.disposicionesEspeciales || []).join('\n') || null}, ${key},
+              ${analysis ? JSON.stringify(analysis) : null}::jsonb, ${req.jwt.email})
+      RETURNING *
+    `
+    res.status(201).json({ template: rows[0], analyzed: !!analysis })
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.get('/exit-letters', ...authed, requireHR, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const rows = await req.tenantDb.$queryRaw<any[]>`
+      SELECT * FROM exit_letter_templates WHERE tenant_id = ${req.tenant.id} ORDER BY created_at DESC
+    `
+    res.json({ templates: rows })
+  } catch (err) {
+    next(err)
+  }
+})
+
+const exitPatchSchema = z.object({
+  nombre:        z.string().min(1).optional(),
+  tipo:          z.enum(['renuncia', 'despido_justificado', 'despido_injustificado', 'mutuo_acuerdo']).optional(),
+  disposiciones: z.string().optional(),
+})
+
+router.patch('/exit-letters/:id', ...authed, requireHR, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const input = exitPatchSchema.parse(req.body)
+    const rows = await req.tenantDb.$queryRaw<any[]>`
+      UPDATE exit_letter_templates SET
+        nombre        = COALESCE(${input.nombre ?? null}, nombre),
+        tipo          = COALESCE(${input.tipo ?? null}, tipo),
+        disposiciones = COALESCE(${input.disposiciones ?? null}, disposiciones)
+      WHERE id = ${req.params.id} AND tenant_id = ${req.tenant.id}
+      RETURNING *
+    `
+    if (!rows[0]) throw new AppError(404, 'Machote no encontrado')
+    res.json({ template: rows[0] })
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.delete('/exit-letters/:id', ...authed, requireHR, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const rows = await req.tenantDb.$queryRaw<any[]>`
+      DELETE FROM exit_letter_templates WHERE id = ${req.params.id} AND tenant_id = ${req.tenant.id} RETURNING id
+    `
+    if (!rows[0]) throw new AppError(404, 'Machote no encontrado')
+    res.json({ ok: true })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── PROCESO DE SEPARACIÓN (wizard "lanzar un misil") ─────────
+
+// Cálculo completo del finiquito/liquidación por tipo de separación.
+// Reusa las calculadoras puras de arriba y añade indemnización y descuentos.
+const separationCalcSchema = z.object({
+  tipo:           z.enum(['renuncia', 'despido_justificado', 'despido_injustificado', 'mutuo_acuerdo', 'jubilacion']),
+  salarioMensual: z.coerce.number().positive(),
+  antiguedad:     z.coerce.number().min(0),
+  diasTrabajados: z.coerce.number().min(0).max(365).default(365),
+  salarioMinimo:  z.coerce.number().positive().default(278.80), // SM diario general 2025 (ajustable)
+  prestamosPendientes: z.coerce.number().min(0).default(0),
+})
+
+function calcSeparacion(input: z.infer<typeof separationCalcSchema>) {
+  const { tipo, salarioMensual, antiguedad, diasTrabajados, salarioMinimo, prestamosPendientes } = input
+  const salarioDiario = salarioMensual / 30
+  const finiquito = calcFiniquito(salarioMensual, antiguedad, diasTrabajados)
+
+  const conceptos: { concepto: string; articulo: string; monto: number }[] = [
+    { concepto: 'Vacaciones proporcionales', articulo: 'Art. 76 LFT', monto: finiquito.vacacionesProporcional },
+    { concepto: 'Prima vacacional (25%)',    articulo: 'Art. 80 LFT', monto: finiquito.primaVacacional },
+    { concepto: 'Aguinaldo proporcional',    articulo: 'Art. 87 LFT', monto: finiquito.aguinaldoProporcional },
+  ]
+
+  // Prima de antigüedad (Art. 162): 12 días/año, tope 2x salario mínimo.
+  // Aplica en renuncia con 15+ años, y en despidos/jubilación.
+  const primaAntiguedadAplica =
+    tipo === 'despido_justificado' || tipo === 'despido_injustificado' ||
+    tipo === 'jubilacion' || tipo === 'mutuo_acuerdo' ||
+    (tipo === 'renuncia' && antiguedad >= 15)
+  let primaAntiguedad = 0
+  if (primaAntiguedadAplica) {
+    const primaDiario = Math.min(salarioDiario, salarioMinimo * 2)
+    primaAntiguedad = round2(primaDiario * 12 * antiguedad)
+    conceptos.push({ concepto: 'Prima de antigüedad', articulo: 'Art. 162 LFT', monto: primaAntiguedad })
+  }
+
+  // Indemnización constitucional (despido injustificado): 3 meses + 20 días/año.
+  let indemnizacion = 0
+  if (tipo === 'despido_injustificado') {
+    const tresMeses = round2(salarioDiario * 90)
+    const veinteDias = round2(salarioDiario * 20 * antiguedad)
+    indemnizacion = round2(tresMeses + veinteDias)
+    conceptos.push({ concepto: 'Indemnización 3 meses', articulo: 'Art. 48 LFT', monto: tresMeses })
+    conceptos.push({ concepto: 'Indemnización 20 días/año', articulo: 'Art. 50 LFT', monto: veinteDias })
+  }
+
+  const subtotal = round2(conceptos.reduce((a, c) => a + c.monto, 0))
+  const descuentos = round2(prestamosPendientes)
+  const total = round2(subtotal - descuentos)
+
+  return {
+    tipo, salarioDiario: round2(salarioDiario), diasVacaciones: finiquito.diasVacaciones,
+    conceptos, subtotal,
+    descuentos: [{ concepto: 'Préstamos pendientes', monto: descuentos }],
+    totalFiniquito: total,
+    incluyeIndemnizacion: indemnizacion > 0,
+  }
+}
+
+router.post('/separation/calcular', ...authed, requireHR, (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const input = separationCalcSchema.parse(req.body)
+    res.json(calcSeparacion(input))
+  } catch (err) {
+    next(err)
+  }
+})
+
+// Crea el expediente de separación con folio legible.
+const separationCreateSchema = z.object({
+  employeeId: z.string().min(1),
+  tipo:       z.enum(['renuncia', 'despido_justificado', 'despido_injustificado', 'mutuo_acuerdo', 'jubilacion']),
+  respuestas: z.record(z.string(), z.any()).optional().default({}),
+  calculo:    z.record(z.string(), z.any()).optional().default({}),
+  documentos: z.array(z.any()).optional().default([]),
+})
+
+router.post('/separation', ...authed, requireHR, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const input = separationCreateSchema.parse(req.body)
+    const tenantId = req.tenant.id
+    const tenantDb = req.tenantDb
+    const year = new Date().getFullYear()
+
+    const prefix = String(req.tenant.slug || req.tenant.name || 'ORG').replace(/[^a-zA-Z]/g, '').slice(0, 3).toUpperCase() || 'ORG'
+    const countRows = await tenantDb.$queryRaw<any[]>`
+      SELECT COUNT(*)::int AS n FROM separation_processes
+      WHERE tenant_id = ${tenantId} AND EXTRACT(YEAR FROM created_at) = ${year}
+    `
+    const seq = String((countRows[0]?.n || 0) + 1).padStart(4, '0')
+    const folio = `${prefix}-${year}-SEP-${seq}`
+
+    const rows = await tenantDb.$queryRaw<any[]>`
+      INSERT INTO separation_processes (tenant_id, folio, employee_id, tipo, respuestas, calculo, documentos, created_by, status)
+      VALUES (${tenantId}, ${folio}, ${input.employeeId}, ${input.tipo},
+              ${JSON.stringify(input.respuestas)}::jsonb, ${JSON.stringify(input.calculo)}::jsonb,
+              ${JSON.stringify(input.documentos)}::jsonb, ${req.jwt.email}, 'Iniciado')
+      RETURNING *
+    `
+    res.status(201).json({ process: rows[0] })
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.get('/separation/:id', ...authed, requireHR, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const rows = await req.tenantDb.$queryRaw<any[]>`
+      SELECT * FROM separation_processes WHERE id = ${req.params.id} AND tenant_id = ${req.tenant.id} LIMIT 1
+    `
+    if (!rows[0]) throw new AppError(404, 'Proceso no encontrado')
+    res.json({ process: rows[0] })
   } catch (err) {
     next(err)
   }

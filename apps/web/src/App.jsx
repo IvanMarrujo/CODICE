@@ -47,6 +47,10 @@ import {
   workyStatus, workyConnect, workyPreview, workySync, workyDisconnect,
   bukStatus, bukConnect, bukPreview, bukSync, bukDisconnect,
   factorialStatus, factorialConnect, factorialPreview, factorialSync, factorialDisconnect,
+  uploadContractTemplate, fetchContractTemplates, updateContractTemplate, deleteContractTemplate, generateContractFromTemplate,
+  uploadReglamento, fetchReglamento, uploadExitLetterTemplate, fetchExitLetterTemplates,
+  updateExitLetterTemplate, deleteExitLetterTemplate, calcSeparacion, createSeparacion,
+  generateReport, fetchReportTemplates, saveReportTemplate, deleteReportTemplate,
 } from "./api.js";
 
 // Sesión del cockpit admin persistida solo si el usuario marca "Mantener
@@ -55,7 +59,7 @@ import {
 const ADMIN_SESSION_KEY = "codice_admin_session";
 
 /* ============================================================
-   CÓDICE · Control de personal con LFT en línea
+   KODICE · Control de personal con LFT en línea
    Tenant único: Grupo Food Packing Co. (CDMX)
    Draggable real (mutación DOM + commit, snap a rejilla).
    AI chat conectado al endpoint Anthropic del artefacto.
@@ -83,7 +87,7 @@ const CSS = `
   --text:#e8f0fe;--muted:#8ea0bd;--muted-2:#5d6878;
   --cyan:#4db8ff;--violet:#a78bfa;--emerald:#00c896;--amber:#f5c518;--rose:#fb7185;
   --font:'DM Sans',ui-sans-serif,system-ui,sans-serif;--mono:'DM Mono',ui-monospace,monospace;
-  /* Alias explícitos de la identidad CÓDICE — mismos valores que los vars de arriba */
+  /* Alias explícitos de la identidad KODICE — mismos valores que los vars de arriba */
   --codice-ink:#020917;--codice-surface:#06142d;--codice-border:rgba(255,255,255,0.07);
   --codice-signal:#00c896;--codice-alert:#f5c518;--codice-data:#4db8ff;
   --codice-text:#e8f0fe;--codice-muted:rgba(232,240,254,0.45);
@@ -284,7 +288,7 @@ const CURSOS_SEED = [
   { id: "C-02", titulo: "Buenas Prácticas de Manufactura (BPM)", cat: "Calidad", dur: "2h", oblig: true, progreso: 100, calif: 88, fechaCompl: "2026-02-02", vence: "2026-10-15" },
   { id: "C-03", titulo: "Seguridad en piso y uso de EPP", cat: "Seguridad", dur: "1.5h", oblig: true, progreso: 60, calif: null },
   { id: "C-04", titulo: "Manejo de alérgenos", cat: "Inocuidad", dur: "1h", oblig: true, progreso: 0, calif: null },
-  { id: "C-05", titulo: "Inducción CÓDICE / Onboarding", cat: "Onboarding", dur: "45m", oblig: false, progreso: 100, calif: 100, fechaCompl: "2026-01-20", vence: null },
+  { id: "C-05", titulo: "Inducción KODICE / Onboarding", cat: "Onboarding", dur: "45m", oblig: false, progreso: 100, calif: 100, fechaCompl: "2026-01-20", vence: null },
   { id: "C-06", titulo: "Control de plagas y limpieza (POES)", cat: "Calidad", dur: "1h", oblig: false, progreso: 30, calif: null },
 ];
 const QUIZ = [
@@ -535,18 +539,47 @@ function NominaWidget({ token, go }) {
   );
 }
 
+/* ── Cards colapsables — estado persistido en localStorage ──────────────
+   Clave kodice:collapsed_cards → { [cardId]: true|false }. Cada WidgetShell
+   lee su estado al montar y lo escribe al alternar. */
+const COLLAPSED_CARDS_KEY = "kodice:collapsed_cards";
+function readCollapsedCards() {
+  try { return JSON.parse(localStorage.getItem(COLLAPSED_CARDS_KEY) || "{}") || {}; }
+  catch { return {}; }
+}
+function writeCollapsedCard(id, value) {
+  const state = readCollapsedCards();
+  state[id] = value;
+  try { localStorage.setItem(COLLAPSED_CARDS_KEY, JSON.stringify(state)); } catch {}
+}
+
 function WidgetShell({ id, title, badge, active, onStart, setRef, x, y, w, h, children }) {
+  const [collapsed, setCollapsed] = useState(() => !!readCollapsedCards()[id]);
+  const toggle = () => setCollapsed((c) => { const next = !c; writeCollapsedCard(id, next); return next; });
+  const shellHeight = collapsed ? 46 : h;
+
   return (
-    <div ref={setRef} className={`widget ${active ? "dragging" : ""}`} style={{ left: x, top: y, width: w, height: h }}>
+    <div ref={setRef} className={`widget ${active ? "dragging" : ""}`} style={{ left: x, top: y, width: w, height: shellHeight }}>
       <div className="glass glasscard" style={{ width: "100%", height: "100%", padding: 14, overflow: "hidden" }}>
-        <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+        <div className="row" style={{ justifyContent: "space-between", marginBottom: collapsed ? 0 : 10 }}>
           <div className="row" style={{ gap: 8 }}>
             <GripVertical size={14} className="handle" onPointerDown={(e) => onStart(e, id)} />
             <span style={{ fontSize: 12.5, fontWeight: 600 }}>{title}</span>
           </div>
-          {badge}
+          <div className="row" style={{ gap: 8 }}>
+            {!collapsed && badge}
+            <button
+              type="button"
+              onClick={toggle}
+              title={collapsed ? "Expandir" : "Colapsar"}
+              aria-label={collapsed ? "Expandir tarjeta" : "Colapsar tarjeta"}
+              style={{ width: 16, height: 16, lineHeight: "14px", padding: 0, border: "none", background: "none", cursor: "pointer", color: "var(--muted)", fontSize: 16, fontWeight: 700, flexShrink: 0 }}
+            >
+              {collapsed ? "+" : "−"}
+            </button>
+          </div>
         </div>
-        {children}
+        {!collapsed && children}
       </div>
     </div>
   );
@@ -604,6 +637,118 @@ function StatusPlantillaWidget({ token, onFilterStatus }) {
   );
 }
 
+/* ── Feature 3 · Guía de transición a jornada 40h (LFT 2026) ────────────
+   Modal informativo abierto desde la card "Transición jornada 40h". */
+const JORNADA_CALENDARIO = [
+  { year: "2026", horas: "48h", reduccion: "Base actual" },
+  { year: "2027", horas: "46h", reduccion: "-2h" },
+  { year: "2028", horas: "44h", reduccion: "-2h" },
+  { year: "2029", horas: "42h", reduccion: "-2h" },
+  { year: "2030", horas: "40h", reduccion: "-2h" },
+];
+const JORNADA_ESTRATEGIAS = [
+  { t: "Redistribución de turnos", d: "Ajustar turnos sin contratar personal adicional." },
+  { t: "Banco de horas", d: "Acumular horas en periodos de baja demanda." },
+  { t: "Automatización progresiva", d: "Reducir carga manual para compensar menos horas." },
+  { t: "Contratación gradual", d: "Planear incremento de plantilla en 2-3 años." },
+];
+const JORNADA_FUENTES = [
+  { label: "DOF", url: "https://www.dof.gob.mx" },
+  { label: "STPS", url: "https://www.gob.mx/stps" },
+  { label: "IMSS", url: "https://www.imss.gob.mx" },
+  { label: "LFT texto vigente", url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/125.pdf" },
+];
+
+function JornadaTransitionModal({ onClose }) {
+  const secTitle = { fontSize: 12.5, fontWeight: 700, letterSpacing: ".02em", margin: "0 0 8px", color: "var(--cyan)" };
+  const body = { fontSize: 13, lineHeight: 1.6, color: "var(--muted)" };
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="glass" style={{ width: "min(640px,94vw)", maxHeight: "88vh", overflowY: "auto", padding: 24 }} onClick={(e) => e.stopPropagation()}>
+        <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+          <div className="row" style={{ gap: 9 }}>
+            <Clock size={18} color="var(--amber)" />
+            <span style={{ fontWeight: 700, fontSize: 16 }}>Guía de transición a jornada 40h</span>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Cerrar" title="Cerrar"
+            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", padding: 2 }}>
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* SECCIÓN 1 — Qué dice la ley */}
+        <section style={{ marginBottom: 22 }}>
+          <h3 style={secTitle}>1 · Qué dice la ley</h3>
+          <p style={body}>
+            La reforma al Art. 61 de la LFT establece una reducción gradual de la jornada máxima
+            semanal de 48h (2026) hasta 40h (2030), sin reducción de salario.
+          </p>
+          <div style={{ marginTop: 10 }}>
+            <a className="chip" href="https://www.dof.gob.mx" target="_blank" rel="noopener noreferrer"
+              style={{ textDecoration: "none", color: "var(--cyan)", cursor: "pointer" }}>
+              DOF 23-dic-2023 →
+            </a>
+          </div>
+        </section>
+
+        {/* SECCIÓN 2 — Calendario de reducción */}
+        <section style={{ marginBottom: 22 }}>
+          <h3 style={secTitle}>2 · Calendario de reducción</h3>
+          <table className="tbl" style={{ width: "100%", fontSize: 12.5 }}>
+            <thead><tr><th>Año</th><th>Horas máx/semana</th><th>Reducción</th></tr></thead>
+            <tbody>
+              {JORNADA_CALENDARIO.map((r) => (
+                <tr key={r.year}>
+                  <td style={{ padding: "8px 12px" }} className="mono">{r.year}</td>
+                  <td style={{ padding: "8px 12px" }} className="mono">{r.horas}</td>
+                  <td style={{ padding: "8px 12px", color: r.year === "2026" ? "var(--muted)" : "var(--amber)" }}>{r.reduccion}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+
+        {/* SECCIÓN 3 — Estrategias de transición */}
+        <section style={{ marginBottom: 22 }}>
+          <h3 style={secTitle}>3 · Estrategias de transición</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            {JORNADA_ESTRATEGIAS.map((s, i) => (
+              <div key={i} className="glass-2" style={{ padding: 12 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 4 }}>{i + 1}. {s.t}</div>
+                <div style={{ fontSize: 11.5, color: "var(--muted)", lineHeight: 1.5 }}>{s.d}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* SECCIÓN 4 — Obligaciones del empleador */}
+        <section style={{ marginBottom: 22 }}>
+          <h3 style={secTitle}>4 · Obligaciones del empleador</h3>
+          <ul style={{ ...body, margin: 0, paddingLeft: 18 }}>
+            <li>Registro electrónico de jornada obligatorio (Art. 61 bis)</li>
+            <li>Sin reducción de salario</li>
+            <li>Aplica a todos los contratos vigentes</li>
+            <li>Sindicatos deben ser notificados</li>
+          </ul>
+        </section>
+
+        {/* SECCIÓN 5 — Fuentes oficiales */}
+        <section>
+          <h3 style={secTitle}>5 · Fuentes oficiales</h3>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+            {JORNADA_FUENTES.map((f) => (
+              <a key={f.label} className="chip" href={f.url} target="_blank" rel="noopener noreferrer"
+                style={{ textDecoration: "none", color: "var(--cyan)", cursor: "pointer" }}>
+                {f.label} →
+              </a>
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 function Cockpit({ staff, solicitudes, resolver, go, attendance, openExpediente, token, onFilterPlantillaStatus }) {
   const total = staff.length;
   const byStatus = useMemo(() => { const m = {}; staff.forEach((e) => (m[e.status] = (m[e.status] || 0) + 1)); return Object.entries(m).map(([name, value]) => ({ name, value, fill: STATUS[name] })); }, [staff]);
@@ -617,6 +762,7 @@ function Cockpit({ staff, solicitudes, resolver, go, attendance, openExpediente,
 
   const [layout, setLayout] = useState(COCKPIT_DEFAULT);
   const [activeId, setActiveId] = useState(null);
+  const [showJornadaModal, setShowJornadaModal] = useState(false);
   const wrapRef = useRef(null);
   const els = useRef({});
   const drag = useRef(null);
@@ -717,6 +863,10 @@ function Cockpit({ staff, solicitudes, resolver, go, attendance, openExpediente,
               </div>); })}
           </div>
           <div className="muted" style={{ fontSize: 11, marginTop: 9 }}>Reducción gradual 48→40h/semana sin afectar salario. Registro electrónico de jornada obligatorio.</div>
+          <button type="button" onClick={() => setShowJornadaModal(true)}
+            style={{ marginTop: 10, background: "none", border: "none", padding: 0, cursor: "pointer", color: "var(--cyan)", fontSize: 12, fontWeight: 600 }}>
+            ¿Cómo hacer la transición? →
+          </button>
         </WidgetShell>
 
         <WidgetShell id="solicitudes" title="Solicitudes pendientes" active={activeId === "solicitudes"} onStart={onStart} setRef={setRef("solicitudes")} {...pos("solicitudes")}
@@ -755,6 +905,9 @@ function Cockpit({ staff, solicitudes, resolver, go, attendance, openExpediente,
           <StatusPlantillaWidget token={token} onFilterStatus={onFilterPlantillaStatus} />
         </WidgetShell>
       </div>
+      <AnimatePresence>
+        {showJornadaModal && <JornadaTransitionModal onClose={() => setShowJornadaModal(false)} />}
+      </AnimatePresence>
     </div>
   );
 }
@@ -2271,14 +2424,14 @@ const CONNECTION_MODES = [
   },
   {
     id: "B", icon: "📂", subtitle: "MODO B", title: "Carpeta compartida",
-    desc: "Nomipaq deposita el archivo en una carpeta de red. CÓDICE la monitorea y sincroniza automáticamente al detectar un archivo nuevo.",
+    desc: "Nomipaq deposita el archivo en una carpeta de red. KODICE la monitorea y sincroniza automáticamente al detectar un archivo nuevo.",
     compat: ["Nomipaq DBF (EMPLEA + NOMINA)", "Cualquier sistema con output a carpeta local o de red"],
     impl: "1-2 horas IT", requiere: "acceso carpeta de red",
     recomendado: "Más usado en manufactura",
   },
   {
     id: "C", icon: "🔌", subtitle: "MODO C", title: "Conexión directa",
-    desc: "CÓDICE se conecta directamente a Nomipaq o CONTPAQi vía ODBC o SDK. Sync automático cada quincena sin intervención manual.",
+    desc: "KODICE se conecta directamente a Nomipaq o CONTPAQi vía ODBC o SDK. Sync automático cada quincena sin intervención manual.",
     compat: ["CONTPAQi SDK oficial", "Nomipaq ODBC", "ZKTeco / Anviz (asistencia)"],
     impl: "4-8h con IT", requiere: "acceso al servidor donde corre el sistema de nómina",
     recomendado: "Mayor automatización",
@@ -2462,7 +2615,7 @@ function FieldMapperTable({ headers, manualMap, setManualMap, customFieldTypes, 
   return (
     <div className="glass" style={{ padding: 0, overflow: "hidden" }}>
       <table className="tbl">
-        <thead><tr><th>Columna en tu archivo</th><th>Campo en CÓDICE</th><th>Status</th></tr></thead>
+        <thead><tr><th>Columna en tu archivo</th><th>Campo en KODICE</th><th>Status</th></tr></thead>
         <tbody>
           {headers.map((h) => {
             const matched = !!h.field;
@@ -2765,7 +2918,7 @@ function DataPreviewStep({ preview, manualMap, view, setView, onContinue, onBack
   return (
     <div>
       <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Vista previa de tus datos</div>
-      <div className="muted" style={{ fontSize: 12.5, marginBottom: 14 }}>Así se verán tus datos en CÓDICE — revisa antes de continuar.</div>
+      <div className="muted" style={{ fontSize: 12.5, marginBottom: 14 }}>Así se verán tus datos en KODICE — revisa antes de continuar.</div>
 
       <div className="row" style={{ gap: 6, marginBottom: 14 }}>
         <button className={`btn btn-sm ${view === "table" ? "btn-accent" : ""}`} onClick={() => setView("table")}>Tabla</button>
@@ -2821,7 +2974,7 @@ function ImportConfirmStep({ preview, manualMap, employeeCount, onConfirm, onBac
   return (
     <div>
       <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>¿Estás listo para importar?</div>
-      <div className="muted" style={{ fontSize: 12.5, marginBottom: 16 }}>Revisa el resumen antes de escribir los cambios en CÓDICE.</div>
+      <div className="muted" style={{ fontSize: 12.5, marginBottom: 16 }}>Revisa el resumen antes de escribir los cambios en KODICE.</div>
 
       <div className="glass-2" style={{ padding: 14, marginBottom: 16 }}>
         <ChecklistRow ok>{preview.totalRows} empleado{preview.totalRows === 1 ? "" : "s"} detectado{preview.totalRows === 1 ? "" : "s"}</ChecklistRow>
@@ -3177,7 +3330,7 @@ function ModoBPanel({ onClose }) {
       )}
 
       <div className="muted2" style={{ fontSize: 11, marginTop: 20, lineHeight: 1.6 }}>
-        Tu equipo de IT deberá compartir la carpeta de salida de Nomipaq con acceso de lectura para el servidor de CÓDICE. Tiempo estimado: 1-2 horas.
+        Tu equipo de IT deberá compartir la carpeta de salida de Nomipaq con acceso de lectura para el servidor de KODICE. Tiempo estimado: 1-2 horas.
       </div>
     </ConfigPanel>
   );
@@ -3196,7 +3349,7 @@ function ConnectionTestButton({ label }) {
       {state === "fail" && (
         <div className="row" style={{ gap: 6, marginTop: 8, alignItems: "flex-start" }}>
           <span className="dot" style={{ background: "var(--rose)", marginTop: 4, flexShrink: 0 }} />
-          <span style={{ fontSize: 11.5, color: "var(--rose)" }}>No se detectó un servidor accesible en esta red — verifica que el servicio esté expuesto al servidor de CÓDICE.</span>
+          <span style={{ fontSize: 11.5, color: "var(--rose)" }}>No se detectó un servidor accesible en esta red — verifica que el servicio esté expuesto al servidor de KODICE.</span>
         </div>
       )}
     </div>
@@ -3778,7 +3931,7 @@ function WhatsAppAgentTestCard({ token }) {
           <div className="glass-2" style={{ padding: 14, background: "rgba(79,214,163,.06)", borderColor: "rgba(79,214,163,.25)" }}>
             <div className="row" style={{ gap: 7, marginBottom: 8 }}>
               <Bot size={14} color="var(--emerald)" />
-              <span style={{ fontWeight: 600, fontSize: 12.5 }}>Agente CÓDICE</span>
+              <span style={{ fontWeight: 600, fontSize: 12.5 }}>Agente KODICE</span>
             </div>
             <div style={{ fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{result.response}</div>
             <div style={{ textAlign: "right", marginTop: 8, fontSize: 11, color: "var(--cyan)" }}>✓✓</div>
@@ -4110,7 +4263,7 @@ function OdooConnectModal({ token, onClose, onConnected }) {
         <input className="input" type="password" style={{ marginBottom: 8, width: "100%" }} value={form.password} onChange={set("password")} />
 
         <div className="muted2" style={{ fontSize: 11.5, marginBottom: 4 }}>Usa las mismas credenciales con las que entras a Odoo.</div>
-        <div className="muted2" style={{ fontSize: 11.5, marginBottom: 16 }}>CÓDICE se conecta a Odoo sin reemplazarlo.</div>
+        <div className="muted2" style={{ fontSize: 11.5, marginBottom: 16 }}>KODICE se conecta a Odoo sin reemplazarlo.</div>
 
         {result && (
           <div className="glass-2" style={{ padding: "9px 12px", marginBottom: 14, borderLeft: `3px solid ${result.ok ? "var(--emerald)" : "var(--rose)"}` }}>
@@ -4311,12 +4464,12 @@ const LATAM_CONNECTORS = [
   {
     id: "runa", name: "Runa HR", sourceType: "RUNA", icon: "🔵",
     statusFn: runaStatus, connectFn: runaConnect, disconnectFn: runaDisconnect, previewFn: runaPreview,
-    blurb: "Complementa tu nómina Runa con CÓDICE",
+    blurb: "Complementa tu nómina Runa con KODICE",
   },
   {
     id: "worky", name: "Worky", sourceType: "WORKY", icon: "🟤",
     statusFn: workyStatus, connectFn: workyConnect, disconnectFn: workyDisconnect, previewFn: workyPreview,
-    blurb: "Conecta tu cuenta Worky con CÓDICE",
+    blurb: "Conecta tu cuenta Worky con KODICE",
   },
   {
     id: "buk", name: "Buk", sourceType: "BUK", icon: "🟠",
@@ -4326,7 +4479,7 @@ const LATAM_CONNECTORS = [
   {
     id: "factorial", name: "Factorial", sourceType: "FACTORIAL", icon: "🟣",
     statusFn: factorialStatus, connectFn: factorialConnect, disconnectFn: factorialDisconnect, previewFn: factorialPreview,
-    blurb: "Conecta tu cuenta Factorial con CÓDICE",
+    blurb: "Conecta tu cuenta Factorial con KODICE",
   },
 ];
 
@@ -4373,7 +4526,7 @@ function SimpleTokenConnectModal({ config, token, onClose, onConnected }) {
         <input className="input" type="password" style={{ marginBottom: 14, width: "100%" }} value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
 
         <div className="glass-2 muted2" style={{ padding: "10px 12px", marginBottom: 14, fontSize: 11.5, lineHeight: 1.5 }}>
-          CÓDICE se conecta a {config.name} sin reemplazarlo. Tu nómina sigue en {config.name} — CÓDICE agrega
+          KODICE se conecta a {config.name} sin reemplazarlo. Tu nómina sigue en {config.name} — KODICE agrega
           señalización digital, agente IA y compliance NOM-030.
         </div>
 
@@ -4508,7 +4661,7 @@ function Conectores({ token, socket, tenantId }) {
         <NdaDownloadButton token={token} />
       </div>
       <div className="muted" style={{ fontSize: 13, marginBottom: 18, maxWidth: 640 }}>
-        Conecta CÓDICE con tu sistema de nómina actual. Sin reemplazarlo. Sin migrar datos manualmente.
+        Conecta KODICE con tu sistema de nómina actual. Sin reemplazarlo. Sin migrar datos manualmente.
       </div>
 
       <StorageWarningBanner token={token} />
@@ -4517,7 +4670,7 @@ function Conectores({ token, socket, tenantId }) {
 
       <div style={{ marginTop: 30 }}>
         <Eyebrow>Conectores disponibles</Eyebrow>
-        <div className="muted" style={{ fontSize: 12.5, margin: "4px 0 16px" }}>Sistemas de RH externos que CÓDICE sincroniza directamente</div>
+        <div className="muted" style={{ fontSize: 12.5, margin: "4px 0 16px" }}>Sistemas de RH externos que KODICE sincroniza directamente</div>
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
           <ZohoConnectorCard token={token} refreshKey={refreshKey} onSync={openZohoWizard} />
           <MondayConnectorCard token={token} refreshKey={refreshKey} onSync={openMondayWizard} />
@@ -4576,7 +4729,7 @@ function Conectores({ token, socket, tenantId }) {
 /* ============================================================
    CONTRATOS
    ============================================================ */
-function Contratos({ staff }) {
+function Contratos({ staff, token }) {
   const [tipo, setTipo] = useState("Indeterminado"); const [empId, setEmpId] = useState("");
   const emp = staff.find((e) => e.id === empId);
   const [form, setForm] = useState({ nombre: "", puesto: "", salario: "", duracion: "12 meses", inicio: todayISO });
@@ -4611,9 +4764,223 @@ function Contratos({ staff }) {
           <div style={{ padding: 22, maxHeight: 560, overflowY: "auto", background: "rgba(255,255,255,.97)", color: "#16202e" }} dangerouslySetInnerHTML={{ __html: doc.replace(/<\/?(html|head|body)[^>]*>/g, "").replace(/<style[\s\S]*?<\/style>/g, "") }} />
         </div>
       </div>
+      <MachotesBiblioteca token={token} staff={staff} />
     </div>
   );
 }
+
+/* ── Feature 4 · Biblioteca de machotes de contrato ──────────────── */
+const MACHOTE_TIPOS = ["Indefinido", "Determinado", "Prueba", "Capacitación", "Obra"];
+
+function MachotesBiblioteca({ token, staff }) {
+  const [templates, setTemplates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [dragOver, setDragOver] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [editing, setEditing] = useState(null);   // template en edición (post-IA o "Editar")
+  const [using, setUsing] = useState(null);        // template para generar contrato
+  const fileRef = useRef(null);
+
+  const reload = useCallback(() => {
+    if (!token) return;
+    setLoading(true);
+    fetchContractTemplates(token)
+      .then((r) => setTemplates(r.templates || []))
+      .catch((e) => toast(e.message, "err"))
+      .finally(() => setLoading(false));
+  }, [token]);
+  useEffect(() => { reload(); }, [reload]);
+
+  const onFiles = async (files) => {
+    const file = files?.[0];
+    if (!file) return;
+    const ext = file.name.toLowerCase().slice(file.name.lastIndexOf("."));
+    if (![".pdf", ".docx"].includes(ext)) { toast("Solo PDF o DOCX", "err"); return; }
+    setUploading(true);
+    try {
+      const r = await uploadContractTemplate(token, file);
+      toast(r.analyzed ? "Machote analizado por IA" : "Machote subido — completa los campos");
+      setEditing(r.template);   // abre editor con campos pre-llenados
+      reload();
+    } catch (e) { toast(e.message, "err"); }
+    finally { setUploading(false); }
+  };
+
+  return (
+    <div style={{ marginTop: 28 }}>
+      <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
+        <Eyebrow>Biblioteca de machotes</Eyebrow>
+        <span className="chip"><FileSignature size={11} />{templates.length}</span>
+      </div>
+
+      {/* Drag & drop */}
+      <div
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => { e.preventDefault(); setDragOver(false); onFiles(e.dataTransfer.files); }}
+        onClick={() => fileRef.current?.click()}
+        className="glass"
+        style={{ padding: 26, textAlign: "center", cursor: "pointer", border: `1.5px dashed ${dragOver ? "var(--cyan)" : "var(--border-hi)"}`, marginBottom: 18, transition: ".15s" }}
+      >
+        <input ref={fileRef} type="file" accept=".pdf,.docx" style={{ display: "none" }} onChange={(e) => onFiles(e.target.files)} />
+        <Upload size={22} color="var(--cyan)" style={{ marginBottom: 8 }} />
+        <div style={{ fontSize: 13.5, fontWeight: 600 }}>{uploading ? "Analizando con IA…" : "Arrastra un machote (PDF o DOCX)"}</div>
+        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>La IA extrae tipo, cláusulas y campos variables automáticamente</div>
+      </div>
+
+      {/* Grid de machotes */}
+      {loading ? <div className="muted" style={{ fontSize: 13 }}>Cargando machotes…</div> : (
+        templates.length === 0
+          ? <div className="muted" style={{ fontSize: 13 }}>Aún no hay machotes. Sube el primero arriba.</div>
+          : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 12 }}>
+              {templates.map((t) => (
+                <div key={t.id} className="glass-2" style={{ padding: 14 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13.5, marginBottom: 6 }}>{t.nombre}</div>
+                  <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+                    {t.tipo && <span className="chip">{t.tipo}</span>}
+                    {(t.puesto_aplica || []).slice(0, 2).map((p, i) => <span key={i} className="chip" style={{ color: "var(--violet)" }}><Tag size={10} />{p}</span>)}
+                  </div>
+                  <div className="muted2" style={{ fontSize: 11, marginBottom: 10 }}>{new Date(t.created_at).toLocaleDateString("es-MX")}</div>
+                  <div className="row" style={{ gap: 6 }}>
+                    <button className="btn btn-sm btn-accent" onClick={() => setUsing(t)}><FileText size={12} />Usar</button>
+                    <button className="btn btn-sm" onClick={() => setEditing(t)}><Pencil size={12} /></button>
+                    <button className="btn btn-sm btn-no" onClick={async () => { if (!confirm(`¿Eliminar "${t.nombre}"?`)) return; try { await deleteContractTemplate(token, t.id); toast("Machote eliminado"); reload(); } catch (e) { toast(e.message, "err"); } }}><Trash2 size={12} /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+      )}
+
+      <AnimatePresence>
+        {editing && <MachoteEditModal token={token} template={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload(); }} />}
+        {using && <MachoteUsarModal token={token} template={using} staff={staff} onClose={() => setUsing(null)} />}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function MachoteEditModal({ token, template, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    nombre: template.nombre || "",
+    tipo: template.tipo || "Indefinido",
+    puestoAplica: (template.puesto_aplica || []).join(", "),
+    disposiciones: template.disposiciones || "",
+  });
+  const [busy, setBusy] = useState(false);
+  const camposVariables = template.campos_variables || [];
+  const clausulas = template.clausulas || [];
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  const guardar = async () => {
+    setBusy(true);
+    try {
+      await updateContractTemplate(token, template.id, {
+        nombre: form.nombre, tipo: form.tipo,
+        puestoAplica: form.puestoAplica.split(",").map((s) => s.trim()).filter(Boolean),
+        disposiciones: form.disposiciones,
+      });
+      toast("Machote guardado");
+      onSaved();
+    } catch (e) { toast(e.message, "err"); setBusy(false); }
+  };
+
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="glass" style={{ width: "min(560px,94vw)", maxHeight: "88vh", overflowY: "auto", padding: 22 }} onClick={(e) => e.stopPropagation()}>
+        <div className="row" style={{ justifyContent: "space-between", marginBottom: 16 }}>
+          <span style={{ fontWeight: 700, fontSize: 15 }}>Editar machote</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)" }}><X size={18} /></button>
+        </div>
+        <label className="fld">Nombre del machote</label>
+        <input className="input" style={{ marginBottom: 12 }} value={form.nombre} onChange={set("nombre")} />
+        <label className="fld">Tipo</label>
+        <select className="select" style={{ marginBottom: 12 }} value={form.tipo} onChange={set("tipo")}>
+          {MACHOTE_TIPOS.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <label className="fld">Puesto que aplica (separado por comas)</label>
+        <input className="input" style={{ marginBottom: 12 }} value={form.puestoAplica} onChange={set("puestoAplica")} placeholder="Operador nocturno, Supervisor de línea…" />
+        {camposVariables.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <label className="fld">Campos variables detectados</label>
+            <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>{camposVariables.map((c, i) => <span key={i} className="chip" style={{ color: "var(--cyan)" }}>{c}</span>)}</div>
+          </div>
+        )}
+        {clausulas.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <label className="fld">Cláusulas principales ({clausulas.length})</label>
+            <ul className="muted" style={{ fontSize: 12, paddingLeft: 18, margin: 0, maxHeight: 120, overflowY: "auto" }}>{clausulas.map((c, i) => <li key={i}>{c}</li>)}</ul>
+          </div>
+        )}
+        <label className="fld">Disposiciones de lógica</label>
+        <textarea className="input" rows={4} style={{ marginBottom: 16, resize: "vertical" }} value={form.disposiciones} onChange={set("disposiciones")}
+          placeholder="Ej: Este contrato aplica solo a operadores nocturnos. Incluye cláusula de confidencialidad por 2 años post-empleo. El periodo de prueba es de 60 días para este puesto." />
+        <button className="btn btn-accent" disabled={busy || !form.nombre} onClick={guardar}>{busy ? "Guardando…" : "Guardar machote"}</button>
+      </div>
+    </div>
+  );
+}
+
+function MachoteUsarModal({ token, template, staff, onClose }) {
+  const [empId, setEmpId] = useState("");
+  const [custom, setCustom] = useState([]);   // [{k,v}]
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const generar = async () => {
+    if (!empId) { toast("Selecciona un colaborador", "err"); return; }
+    setBusy(true);
+    try {
+      const customFields = {};
+      custom.forEach(({ k, v }) => { if (k.trim()) customFields[k.trim().toUpperCase()] = v; });
+      const r = await generateContractFromTemplate(token, template.id, { employeeId: empId, customFields });
+      setResult(r);
+      toast("Contrato generado");
+    } catch (e) { toast(e.message, "err"); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="glass" style={{ width: "min(520px,94vw)", maxHeight: "88vh", overflowY: "auto", padding: 22 }} onClick={(e) => e.stopPropagation()}>
+        <div className="row" style={{ justifyContent: "space-between", marginBottom: 16 }}>
+          <span style={{ fontWeight: 700, fontSize: 15 }}>Generar contrato · {template.nombre}</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)" }}><X size={18} /></button>
+        </div>
+        {result ? (
+          <div>
+            <div className="glass-2" style={{ padding: 16, marginBottom: 14 }}>
+              <CircleCheck size={20} color="var(--emerald)" style={{ marginBottom: 6 }} />
+              <div style={{ fontWeight: 600, fontSize: 13.5 }}>Contrato generado</div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Folio interno: {result.contractId}</div>
+            </div>
+            <a className="btn btn-accent" href={typeof result.pdfUrl === "string" && result.pdfUrl.startsWith("http") ? result.pdfUrl : undefined} target="_blank" rel="noopener noreferrer" onClick={() => toast("Contrato listo para firma digital")}><Download size={14} />Descargar / firma digital</a>
+          </div>
+        ) : (
+          <>
+            <label className="fld">Colaborador</label>
+            <select className="select" style={{ marginBottom: 14 }} value={empId} onChange={(e) => setEmpId(e.target.value)}>
+              <option value="">— Selecciona —</option>
+              {staff.slice(0, 200).map((e) => <option key={e.id} value={e.id}>{e.nombre} · {e.puesto}</option>)}
+            </select>
+            <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
+              <label className="fld" style={{ margin: 0 }}>Campos personalizados</label>
+              <button className="btn btn-sm" onClick={() => setCustom((c) => [...c, { k: "", v: "" }])}><Plus size={12} />Campo</button>
+            </div>
+            {custom.map((c, i) => (
+              <div key={i} className="row" style={{ gap: 8, marginBottom: 8 }}>
+                <input className="input" placeholder="VARIABLE" value={c.k} onChange={(e) => setCustom((arr) => arr.map((x, j) => j === i ? { ...x, k: e.target.value } : x))} />
+                <input className="input" placeholder="valor" value={c.v} onChange={(e) => setCustom((arr) => arr.map((x, j) => j === i ? { ...x, v: e.target.value } : x))} />
+                <button className="btn btn-sm btn-no" onClick={() => setCustom((arr) => arr.filter((_, j) => j !== i))}><X size={12} /></button>
+              </div>
+            ))}
+            <button className="btn btn-accent" style={{ marginTop: 8 }} disabled={busy} onClick={generar}>{busy ? "Generando…" : "Generar contrato"}</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function buildContract({ tipo, form, sd, planta }) {
   const dur = {
     "Indeterminado": "El presente contrato se celebra por <b>tiempo indeterminado</b>, en términos del artículo 35 de la LFT.",
@@ -4633,7 +5000,7 @@ function buildContract({ tipo, form, sd, planta }) {
   <h2>Sexta — Inocuidad y confidencialidad</h2><p>El Trabajador observará las normas de inocuidad alimentaria, seguridad e higiene aplicables y guardará reserva de la información del Patrón.</p>
   <h2>Séptima — Disposiciones finales</h2><p>En lo no previsto se estará a la LFT. Las partes firman de conformidad.</p>
   <div class="sign"><div>El Patrón<br>${ORG.name}</div><div>El Trabajador<br>${form.nombre || "[Nombre]"}</div></div>
-  <p style="margin-top:30px;font-size:10px;color:#888">Generado por CÓDICE · Plantilla referencial. Validar con asesoría jurídica antes de su uso.</p></body></html>`;
+  <p style="margin-top:30px;font-size:10px;color:#888">Generado por KODICE · Plantilla referencial. Validar con asesoría jurídica antes de su uso.</p></body></html>`;
 }
 
 /* ============================================================
@@ -4700,7 +5067,7 @@ function VacationPolicyPanel({ token }) {
 }
 
 /* ============================================================
-   CÓDICE RADAR — Occupational Risk Intelligence System
+   KODICE RADAR — Occupational Risk Intelligence System
    ============================================================ */
 
 const RADAR_URGENCY_COLOR = { alta: "var(--rose)", media: "var(--amber)", baja: "var(--cyan)" };
@@ -5204,8 +5571,9 @@ function RadarPage({ staff, token }) {
   );
 }
 
-function LFT({ token }) {
+function LFT({ token, staff }) {
   const [tab, setTab] = useState("aguinaldo");
+  const [wizardOpen, setWizardOpen] = useState(false);
   const [sal, setSal] = useState(15000); const [anios, setAnios] = useState(3); const [diasTrab, setDiasTrab] = useState(220); const [salMin, setSalMin] = useState(278.8);
   const sd = sal / 30;
   const c = useMemo(() => {
@@ -5249,6 +5617,379 @@ function LFT({ token }) {
           {tab === "articulos" && <div className="glass" style={{ padding: 6 }}><table className="tbl"><thead><tr><th>Artículo</th><th>Tema</th><th>Resumen</th></tr></thead><tbody>{arts.map((a) => <tr key={a[0]} style={{ cursor: "default" }}><td className="mono" style={{ color: "var(--cyan)", whiteSpace: "nowrap" }}>{a[0]}</td><td style={{ fontWeight: 500, whiteSpace: "nowrap" }}>{a[1]}</td><td className="muted">{a[2]}</td></tr>)}</tbody></table></div>}
         </div>
       </div>
+
+      {/* Feature 5 · Reglamento interno + machotes de carta de salida */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 24 }}>
+        <ReglamentoInterno token={token} />
+        <ExitLetterMachotes token={token} />
+      </div>
+
+      {/* Feature 5 · Lanzar proceso de separación — botón rojo */}
+      <div className="glass" style={{ padding: 22, marginTop: 24, textAlign: "center", border: "1.5px solid rgba(251,113,133,.35)" }}>
+        <div style={{ fontSize: 13.5, fontWeight: 600, marginBottom: 4 }}>Proceso de separación laboral</div>
+        <div className="muted" style={{ fontSize: 12, marginBottom: 14 }}>Flujo guiado, documentado y legalmente sustentado. Irreversible una vez firmado.</div>
+        <button className="btn" onClick={() => setWizardOpen(true)}
+          style={{ background: "rgba(251,113,133,.16)", borderColor: "rgba(251,113,133,.5)", color: "#fcc4cd", fontWeight: 700, fontSize: 14, padding: "12px 22px" }}>
+          ⚡ Iniciar proceso de separación laboral
+        </button>
+      </div>
+
+      <AnimatePresence>
+        {wizardOpen && <SeparacionWizard token={token} staff={staff} onClose={() => setWizardOpen(false)} />}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/* ── Feature 5 · Reglamento interno (upload + display) ──────────── */
+function ReglamentoInterno({ token }) {
+  const [doc, setDoc] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const ref = useRef(null);
+  const reload = useCallback(() => { if (token) fetchReglamento(token).then((r) => setDoc(r.document)).catch(() => {}); }, [token]);
+  useEffect(() => { reload(); }, [reload]);
+
+  const onFile = async (file) => {
+    if (!file) return;
+    setBusy(true);
+    try { await uploadReglamento(token, file); toast("Reglamento interno actualizado"); reload(); }
+    catch (e) { toast(e.message, "err"); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="glass" style={{ padding: 18 }}>
+      <Eyebrow>Reglamento interno</Eyebrow>
+      <div className="muted" style={{ fontSize: 12, margin: "6px 0 14px" }}>Se refleja en Avisos del portal del colaborador.</div>
+      {doc && (
+        <div className="glass-2 row" style={{ padding: 12, justifyContent: "space-between", marginBottom: 12 }}>
+          <span className="row" style={{ gap: 8, fontSize: 13 }}><FileText size={15} color="var(--cyan)" />{doc.nombre}</span>
+          <span className="chip" style={{ color: "var(--emerald)" }}>Publicado</span>
+        </div>
+      )}
+      <input ref={ref} type="file" accept=".pdf,.docx" style={{ display: "none" }} onChange={(e) => onFile(e.target.files?.[0])} />
+      <button className="btn" onClick={() => ref.current?.click()} disabled={busy}><Upload size={14} />{busy ? "Subiendo…" : doc ? "Reemplazar documento" : "Subir reglamento (PDF/DOCX)"}</button>
+    </div>
+  );
+}
+
+/* ── Feature 5 · Machotes de carta de salida ──────────────────── */
+const EXIT_TIPOS = [
+  ["renuncia", "Renuncia"], ["despido_justificado", "Despido justificado"],
+  ["despido_injustificado", "Despido injustificado"], ["mutuo_acuerdo", "Mutuo acuerdo"],
+];
+function ExitLetterMachotes({ token }) {
+  const [tpls, setTpls] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const ref = useRef(null);
+  const reload = useCallback(() => { if (token) fetchExitLetterTemplates(token).then((r) => setTpls(r.templates || [])).catch(() => {}); }, [token]);
+  useEffect(() => { reload(); }, [reload]);
+
+  const onFile = async (file) => {
+    if (!file) return;
+    setBusy(true);
+    try { const r = await uploadExitLetterTemplate(token, file); toast(r.analyzed ? "Carta analizada por IA" : "Carta subida"); reload(); }
+    catch (e) { toast(e.message, "err"); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="glass" style={{ padding: 18 }}>
+      <Eyebrow>Machotes · carta de salida</Eyebrow>
+      <div className="muted" style={{ fontSize: 12, margin: "6px 0 14px" }}>La IA extrae tipo y disposiciones al subir.</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12, maxHeight: 130, overflowY: "auto" }}>
+        {tpls.length === 0 && <div className="muted2" style={{ fontSize: 12 }}>Aún no hay machotes de salida.</div>}
+        {tpls.map((t) => (
+          <div key={t.id} className="glass-2 row" style={{ padding: 10, justifyContent: "space-between" }}>
+            <span style={{ fontSize: 12.5 }}>{t.nombre}</span>
+            <span className="row" style={{ gap: 6 }}>
+              {t.tipo && <span className="chip">{(EXIT_TIPOS.find((x) => x[0] === t.tipo) || [, t.tipo])[1]}</span>}
+              <button className="btn btn-sm btn-no" onClick={async () => { try { await deleteExitLetterTemplate(token, t.id); reload(); } catch (e) { toast(e.message, "err"); } }}><Trash2 size={11} /></button>
+            </span>
+          </div>
+        ))}
+      </div>
+      <input ref={ref} type="file" accept=".pdf,.docx" style={{ display: "none" }} onChange={(e) => onFile(e.target.files?.[0])} />
+      <button className="btn" onClick={() => ref.current?.click()} disabled={busy}><Upload size={14} />{busy ? "Analizando…" : "Subir machote de salida"}</button>
+    </div>
+  );
+}
+
+/* ── Feature 5 · Wizard de separación laboral ("lanzar un misil") ── */
+const SEP_TIPOS = [
+  { id: "renuncia", label: "Renuncia voluntaria", icon: "📝" },
+  { id: "despido_justificado", label: "Despido justificado", icon: "⚖️" },
+  { id: "despido_injustificado", label: "Despido injustificado", icon: "🚫" },
+  { id: "mutuo_acuerdo", label: "Mutuo acuerdo", icon: "🤝" },
+  { id: "jubilacion", label: "Jubilación", icon: "🎖️" },
+];
+const ART47_CAUSALES = [
+  "Engaño con certificados falsos (I)", "Faltas de probidad u honradez (II)",
+  "Violencia/amenazas al patrón o compañeros (III)", "Daños intencionales (V)",
+  "Más de 3 faltas en 30 días sin permiso (X)", "Desobediencia sin causa justificada (XI)",
+  "Concurrir en estado de embriaguez/drogas (XIII)",
+];
+const SEP_DOCS = [
+  { id: "finiquito", label: "Finiquito (calculado)", def: true },
+  { id: "carta_salida", label: "Carta de salida", def: true },
+  { id: "acuse", label: "Acuse de recibo", def: true },
+  { id: "baja_imss", label: "Baja del IMSS (recordatorio — manual)", def: true },
+  { id: "no_adeudo", label: "Carta de no adeudo (opcional)", def: false },
+];
+
+function SeparacionWizard({ token, staff, onClose }) {
+  const [step, setStep] = useState(1);
+  const [tipo, setTipo] = useState("");
+  const [empId, setEmpId] = useState("");
+  const [resp, setResp] = useState({});
+  const [calc, setCalc] = useState(null);
+  const [calcBusy, setCalcBusy] = useState(false);
+  const [docs, setDocs] = useState(() => SEP_DOCS.filter((d) => d.def).map((d) => d.id));
+  const [result, setResult] = useState(null);
+  const [finBusy, setFinBusy] = useState(false);
+
+  const emp = staff.find((e) => e.id === empId);
+  const setR = (k, v) => setResp((r) => ({ ...r, [k]: v }));
+
+  const doCalc = async () => {
+    if (!emp) return;
+    setCalcBusy(true);
+    try {
+      const r = await calcSeparacion(token, {
+        tipo, salarioMensual: Number(emp.salario) || 0, antiguedad: Number(emp.antiguedad) || 0,
+        diasTrabajados: 220, prestamosPendientes: Number(resp.prestamoMonto) || 0,
+      });
+      setCalc(r);
+    } catch (e) { toast(e.message, "err"); }
+    finally { setCalcBusy(false); }
+  };
+
+  const finalizar = async () => {
+    setFinBusy(true);
+    try {
+      const r = await createSeparacion(token, {
+        employeeId: empId, tipo, respuestas: resp, calculo: calc || {},
+        documentos: docs.map((id) => ({ id, generado: true })),
+      });
+      setResult(r.process);
+      toast("Proceso de separación iniciado");
+      setStep(7);
+    } catch (e) { toast(e.message, "err"); }
+    finally { setFinBusy(false); }
+  };
+
+  const descargarDesglose = () => {
+    if (!calc) return;
+    const lines = calc.conceptos.map((c) => `${c.concepto} (${c.articulo}),${Math.round(c.monto)}`).join("\n");
+    download(`finiquito_${emp?.nombre?.replace(/\s/g, "_") || "colaborador"}.csv`,
+      `Desglose de finiquito\nColaborador,"${emp?.nombre}"\nTipo,${tipo}\n\nConcepto,Monto\n${lines}\nDescuentos,-${calc.descuentos[0].monto}\nTOTAL FINIQUITO,${Math.round(calc.totalFiniquito)}`, "text/csv");
+    toast("Desglose descargado (.csv)");
+  };
+
+  const canNext = () => {
+    if (step === 1) return !!tipo;
+    if (step === 2) return !!empId;
+    return true;
+  };
+  const goNext = () => {
+    if (step === 3) { doCalc(); setStep(4); return; }
+    if (step === 6) { finalizar(); return; }
+    setStep((s) => Math.min(7, s + 1));
+  };
+
+  const RY = (label, k, opts = ["Sí", "No", "Parcial"]) => (
+    <div style={{ marginBottom: 14 }}>
+      <label className="fld">{label}</label>
+      <div className="row" style={{ gap: 7, flexWrap: "wrap" }}>
+        {opts.map((o) => <button key={o} className={`btn btn-sm ${resp[k] === o ? "btn-accent" : ""}`} onClick={() => setR(k, o)}>{o}</button>)}
+      </div>
+    </div>
+  );
+
+  const STEP_TITLES = ["Tipo", "Colaborador", "Preguntas previas", "Cálculo", "Documentos", "Firma digital", "Confirmación"];
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 90, background: "rgba(2,4,8,.94)", backdropFilter: "blur(10px)", overflowY: "auto", padding: "32px 20px" }}>
+      <div style={{ maxWidth: 720, margin: "0 auto" }}>
+        <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
+          <div className="row" style={{ gap: 9 }}><span style={{ fontSize: 18 }}>⚡</span><span style={{ fontWeight: 700, fontSize: 17 }}>Proceso de separación laboral</span></div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)" }}><X size={20} /></button>
+        </div>
+        {/* Step indicator */}
+        <div className="row" style={{ gap: 6, marginBottom: 22, flexWrap: "wrap" }}>
+          {STEP_TITLES.map((t, i) => (
+            <div key={i} className="row" style={{ gap: 6, opacity: step === i + 1 ? 1 : .45 }}>
+              <span className="stepdot" style={{ background: step > i + 1 ? "var(--emerald)" : step === i + 1 ? "var(--cyan)" : "var(--glass-2)", color: step >= i + 1 ? "#02121f" : "var(--muted)" }}>{step > i + 1 ? "✓" : i + 1}</span>
+              {i < STEP_TITLES.length - 1 && <span className="stepline" />}
+            </div>
+          ))}
+        </div>
+
+        <div className="glass" style={{ padding: 24, minHeight: 320 }}>
+          <div className="muted2" style={{ fontSize: 11, letterSpacing: ".12em", textTransform: "uppercase", marginBottom: 14 }}>Paso {step} de 7 · {STEP_TITLES[step - 1]}</div>
+
+          {/* STEP 1 */}
+          {step === 1 && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              {SEP_TIPOS.map((t) => (
+                <button key={t.id} className="glass-2" onClick={() => setTipo(t.id)}
+                  style={{ padding: 18, textAlign: "left", cursor: "pointer", border: `1.5px solid ${tipo === t.id ? "var(--cyan)" : "var(--border)"}` }}>
+                  <div style={{ fontSize: 24, marginBottom: 6 }}>{t.icon}</div>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>{t.label}</div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* STEP 2 */}
+          {step === 2 && (
+            <div>
+              <label className="fld">Buscar colaborador</label>
+              <select className="select" value={empId} onChange={(e) => setEmpId(e.target.value)} style={{ marginBottom: 16 }}>
+                <option value="">— Selecciona —</option>
+                {staff.slice(0, 300).map((e) => <option key={e.id} value={e.id}>{e.nombre} · {e.depto} · {e.puesto}</option>)}
+              </select>
+              {emp && (
+                <div className="glass-2" style={{ padding: 16 }}>
+                  <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 8 }}>{emp.nombre}</div>
+                  <div className="row" style={{ gap: 18, flexWrap: "wrap" }}>
+                    <Stat label="Antigüedad" value={`${emp.antiguedad} años`} />
+                    <Stat label="Último salario" value={mxn(Number(emp.salario) || 0)} accent="var(--emerald)" />
+                    <Stat label="Tipo de contrato" value={emp.contrato || "—"} />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* STEP 3 */}
+          {step === 3 && (
+            <div>
+              {RY("¿Ha tomado todas sus vacaciones correspondientes?", "vacaciones")}
+              {resp.vacaciones === "Parcial" && <input className="input" placeholder="¿Cuántos días pendientes?" style={{ marginBottom: 14 }} value={resp.vacDias || ""} onChange={(e) => setR("vacDias", e.target.value)} />}
+              {RY("¿Recibió aguinaldo completo del último ejercicio fiscal?", "aguinaldo")}
+              {RY("¿Tiene préstamos pendientes con la empresa?", "prestamos", ["Sí", "No"])}
+              {resp.prestamos === "Sí" && <input className="input" type="number" placeholder="Monto pendiente ($)" style={{ marginBottom: 14 }} value={resp.prestamoMonto || ""} onChange={(e) => setR("prestamoMonto", e.target.value)} />}
+              {RY("¿Tiene equipo o activos de la empresa pendientes de devolución?", "activos", ["Sí", "No"])}
+
+              {tipo === "despido_justificado" && (
+                <div style={{ borderTop: "1px solid var(--border)", marginTop: 8, paddingTop: 14 }}>
+                  <div className="muted2" style={{ fontSize: 11, marginBottom: 10 }}>Específico · Despido justificado</div>
+                  {RY("¿Existen actas administrativas previas?", "actas", ["Sí", "No"])}
+                  <label className="fld">Causal tipificada en Art. 47 LFT</label>
+                  <select className="select" style={{ marginBottom: 14 }} value={resp.causal || ""} onChange={(e) => setR("causal", e.target.value)}>
+                    <option value="">— Selecciona causal —</option>
+                    {ART47_CAUSALES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  {RY("¿Se notificó por escrito dentro de los 30 días?", "notif30", ["Sí", "No"])}
+                  {RY("¿Hay testigos del acto?", "testigos", ["Sí", "No"])}
+                  {resp.testigos === "Sí" && <input className="input" placeholder="Nombres de testigos" style={{ marginBottom: 14 }} value={resp.testigosNombres || ""} onChange={(e) => setR("testigosNombres", e.target.value)} />}
+                </div>
+              )}
+              {tipo === "despido_injustificado" && (
+                <div style={{ borderTop: "1px solid var(--border)", marginTop: 8, paddingTop: 14 }}>
+                  <div className="muted2" style={{ fontSize: 11, marginBottom: 10 }}>Específico · Despido injustificado</div>
+                  {RY("¿El colaborador fue notificado?", "notificado", ["Sí", "No"])}
+                  <label className="fld">¿Se ofrecerá reinstalación o indemnización?</label>
+                  <div className="row" style={{ gap: 7, marginBottom: 14 }}>{["Reinstalación", "Indemnización"].map((o) => <button key={o} className={`btn btn-sm ${resp.remedio === o ? "btn-accent" : ""}`} onClick={() => setR("remedio", o)}>{o}</button>)}</div>
+                  <label className="row" style={{ gap: 8, fontSize: 12.5, cursor: "pointer" }}><input type="checkbox" checked={!!resp.riesgoJFCA} onChange={(e) => setR("riesgoJFCA", e.target.checked)} />Existe riesgo de demanda ante la JFCA</label>
+                </div>
+              )}
+              {tipo === "renuncia" && (
+                <div style={{ borderTop: "1px solid var(--border)", marginTop: 8, paddingTop: 14 }}>
+                  <div className="muted2" style={{ fontSize: 11, marginBottom: 10 }}>Específico · Renuncia</div>
+                  {RY("¿Dio aviso con anticipación?", "aviso", ["Sí", "No"])}
+                  {RY("¿Firmó carta de renuncia?", "cartaRenuncia", ["Sí", "No"])}
+                  <label className="row" style={{ gap: 8, fontSize: 12.5, cursor: "pointer" }}><input type="checkbox" checked={!!resp.voluntaria} onChange={(e) => setR("voluntaria", e.target.checked)} />Confirmo que la renuncia fue voluntaria y sin presión</label>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* STEP 4 */}
+          {step === 4 && (
+            calcBusy ? <div className="muted" style={{ fontSize: 13, padding: 20 }}>Calculando finiquito…</div> :
+            calc ? (
+              <div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {calc.conceptos.map((c, i) => (
+                    <div key={i} className="row" style={{ justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+                      <span><span style={{ fontSize: 13 }}>{c.concepto}</span> <span className="mono muted2" style={{ fontSize: 10.5 }}>{c.articulo}</span></span>
+                      <span className="mono" style={{ fontSize: 13 }}>{mxn(c.monto)}</span>
+                    </div>
+                  ))}
+                  <div className="row" style={{ justifyContent: "space-between", padding: "8px 0" }}>
+                    <span style={{ fontSize: 13, color: "var(--rose)" }}>Descuentos · préstamos pendientes</span>
+                    <span className="mono" style={{ fontSize: 13, color: "var(--rose)" }}>−{mxn(calc.descuentos[0].monto)}</span>
+                  </div>
+                </div>
+                <div className="glass-2" style={{ padding: 16, marginTop: 14, textAlign: "center" }}>
+                  <div className="muted2" style={{ fontSize: 11 }}>TOTAL FINIQUITO</div>
+                  <div className="kpi" style={{ fontSize: 34, color: "var(--emerald)" }}>{mxn(calc.totalFiniquito)}</div>
+                  {calc.incluyeIndemnizacion && <div className="chip" style={{ color: "var(--amber)", marginTop: 6 }}>Incluye indemnización constitucional</div>}
+                </div>
+                <button className="btn" style={{ marginTop: 14 }} onClick={descargarDesglose}><Download size={14} />Descargar desglose PDF</button>
+              </div>
+            ) : <div className="muted" style={{ fontSize: 13 }}>No se pudo calcular. Regresa y verifica los datos.</div>
+          )}
+
+          {/* STEP 5 */}
+          {step === 5 && (
+            <div>
+              <div className="muted" style={{ fontSize: 12.5, marginBottom: 14 }}>Selecciona los documentos a generar para el expediente.</div>
+              {SEP_DOCS.map((d) => (
+                <label key={d.id} className="row" style={{ gap: 10, padding: "10px 0", cursor: "pointer", fontSize: 13.5, borderBottom: "1px solid var(--border)" }}>
+                  <input type="checkbox" checked={docs.includes(d.id)} onChange={(e) => setDocs((arr) => e.target.checked ? [...arr, d.id] : arr.filter((x) => x !== d.id))} />
+                  {d.label}
+                </label>
+              ))}
+              {docs.includes("carta_salida") && <div className="muted2" style={{ fontSize: 11.5, marginTop: 12 }}>La carta de salida se pre-llena con datos del colaborador y detalles de la separación (selecciona un machote en Módulo LFT o sube uno nuevo).</div>}
+            </div>
+          )}
+
+          {/* STEP 6 */}
+          {step === 6 && (
+            <div>
+              <div className="glass-2" style={{ padding: 16, marginBottom: 14 }}>
+                <div className="row" style={{ gap: 8, marginBottom: 8 }}><FileSignature size={16} color="var(--cyan)" /><span style={{ fontWeight: 600, fontSize: 14 }}>Firma digital con testigo</span></div>
+                <ul className="muted" style={{ fontSize: 12.5, lineHeight: 1.7, paddingLeft: 18, margin: 0 }}>
+                  <li>El colaborador recibe el enlace de firma vía WhatsApp</li>
+                  <li>Firma digital con sello de tiempo + hash SHA-256</li>
+                  <li>RH firma como testigo</li>
+                  <li>Se genera el PDF legal con cadena de custodia (audit trail)</li>
+                </ul>
+              </div>
+              <div className="muted2" style={{ fontSize: 11.5 }}>Al continuar se inicia formalmente el proceso y se generan los folios de firma.</div>
+            </div>
+          )}
+
+          {/* STEP 7 */}
+          {step === 7 && result && (
+            <div style={{ textAlign: "center" }}>
+              <CircleCheck size={40} color="var(--emerald)" style={{ marginBottom: 10 }} />
+              <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 6 }}>El proceso de separación de {emp?.nombre} ha sido iniciado.</div>
+              <div className="chip" style={{ fontSize: 12, marginBottom: 16 }}>Folio: {result.folio}</div>
+              <div className="glass-2" style={{ padding: 16, textAlign: "left", marginBottom: 16 }}>
+                <div className="muted2" style={{ fontSize: 11, marginBottom: 8 }}>Documentos generados</div>
+                {docs.map((id) => <div key={id} className="row" style={{ gap: 8, fontSize: 12.5, marginBottom: 4 }}><Check size={13} color="var(--emerald)" />{(SEP_DOCS.find((d) => d.id === id) || {}).label}</div>)}
+                <div className="muted2" style={{ fontSize: 11, margin: "10px 0 8px" }}>Firmas pendientes</div>
+                <div className="row" style={{ gap: 8, fontSize: 12.5 }}><Clock size={13} color="var(--amber)" />{emp?.nombre} (colaborador) · RH (testigo)</div>
+              </div>
+              <button className="btn btn-accent" onClick={() => { toast("Descargando expediente…"); onClose(); }}><Download size={14} />Descargar expediente completo</button>
+            </div>
+          )}
+        </div>
+
+        {/* Nav */}
+        {step < 7 && (
+          <div className="row" style={{ justifyContent: "space-between", marginTop: 18 }}>
+            <button className="btn" onClick={() => step === 1 ? onClose() : setStep((s) => s - 1)}><ChevronLeft size={14} />{step === 1 ? "Cancelar" : "Atrás"}</button>
+            <button className="btn btn-accent" disabled={!canNext() || finBusy} onClick={goNext}>
+              {step === 6 ? (finBusy ? "Iniciando…" : "Iniciar proceso →") : <>Continuar<ChevronRight size={14} /></>}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -5257,6 +5998,204 @@ function LFT({ token }) {
    FILTRO → TABLERO
    ============================================================ */
 const DIMS = { depto: "Área", status: "Estatus", contrato: "Contrato", planta: "Planta", turno: "Turno" };
+/* ── Feature 6 · Reportes al instante (shell conversacional) ──────── */
+const PRELOADED_QUESTIONS = [
+  "¿Cuántos ausentismos tuvo [Área] en [Mes] vs [Mes anterior]?",
+  "¿Cuál turno tiene más retardos este trimestre?",
+  "¿Cuántos empleados cumplen 1 año de antigüedad este mes?",
+  "¿Cuál departamento tiene mayor rotación en los últimos 6 meses?",
+  "¿Cuántas incapacidades activas hay hoy vs hace 30 días?",
+  "¿Qué empleados tienen contrato por vencer en 30 días?",
+  "¿Cuánto cuesta la nómina de [Área] vs [Área] este periodo?",
+  "¿Cuántos colaboradores no han tomado vacaciones en el último año?",
+  "¿Cuál supervisor tiene más solicitudes pendientes?",
+  "¿Qué % de la plantilla completó el curso de inocuidad?",
+  "¿Cuántos empleados por turno tiene cada planta?",
+  "¿Cuál es el ausentismo promedio por departamento?",
+  "¿Cuántos empleados tienen más de 5 años de antigüedad?",
+  "¿Cuál fue la nómina total del trimestre pasado?",
+  "¿Cuántos contratos determinados vencen este año?",
+];
+
+function ReportesInstante({ token, staff }) {
+  const [question, setQuestion] = useState("");
+  const [dept, setDept] = useState("");
+  const [mes, setMes] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [report, setReport] = useState(null);
+  const [saved, setSaved] = useState([]);
+  const [showSave, setShowSave] = useState(false);
+  const [saveName, setSaveName] = useState("");
+
+  const departments = useMemo(() => Array.from(new Set(staff.map((e) => e.depto).filter(Boolean))).sort(), [staff]);
+
+  const reloadSaved = useCallback(() => {
+    if (!token) return;
+    fetchReportTemplates(token).then((r) => setSaved(r.templates || [])).catch(() => {});
+  }, [token]);
+  useEffect(() => { reloadSaved(); }, [reloadSaved]);
+
+  // Detección de variables para smart filters.
+  const needsArea = /\[Área\]/i.test(question);
+  const needsMes = /\[Mes/i.test(question);
+
+  const run = async (rawQuestion, filtros) => {
+    const q = rawQuestion ?? question;
+    if (!q.trim()) { toast("Escribe una pregunta", "err"); return; }
+    setBusy(true); setReport(null);
+    try {
+      // Sustituye placeholders con los valores elegidos para dar contexto a la IA.
+      let finalQ = q;
+      const d = filtros?.department ?? dept;
+      if (d) finalQ = finalQ.replace(/\[Área\]/gi, d);
+      if (mes) finalQ = finalQ.replace(/\[Mes anterior\]/gi, "el mes anterior").replace(/\[Mes\]/gi, mes);
+      const filters = {};
+      if (d) filters.department = d;
+      const r = await generateReport(token, { question: finalQ, filters });
+      setReport(r);
+    } catch (e) { toast(e.message, "err"); }
+    finally { setBusy(false); }
+  };
+
+  const runSaved = (tpl) => { setQuestion(tpl.pregunta); run(tpl.pregunta, tpl.filtros); };
+
+  const guardarPlantilla = async () => {
+    if (!saveName.trim() || !report) return;
+    try {
+      await saveReportTemplate(token, { nombre: saveName, pregunta: report.question, filtros: dept ? { department: dept } : {} });
+      toast("Reporte guardado como plantilla");
+      setShowSave(false); setSaveName(""); reloadSaved();
+    } catch (e) { toast(e.message, "err"); }
+  };
+
+  const descargarCSV = () => {
+    if (!report) return;
+    const head = `${report.dimLabel},${report.metricLabel}`;
+    const rows = report.chartData.map((r) => `"${r.name}",${r.value}`).join("\n");
+    download(`reporte_${Date.now()}.csv`, `Reporte KODICE\nPregunta:,"${report.question}"\n\n${head}\n${rows}\n\nResumen,"${report.narrative}"`, "text/csv");
+    toast("Reporte descargado (.csv)");
+  };
+
+  const fmtVal = (v, kind) => kind === "money" ? mxn(v) : kind === "years" ? `${v} años` : v;
+
+  return (
+    <div className="fadein">
+      <Eyebrow>Reportes · IA</Eyebrow>
+      <h1 style={{ fontSize: 22, fontWeight: 700, margin: "5px 0 2px" }}>Reportes al instante</h1>
+      <div className="muted" style={{ fontSize: 13, marginBottom: 18 }}>Haz una pregunta, obtén un reporte.</div>
+
+      {/* Shell conversacional */}
+      <div className="glass" style={{ padding: 18, marginBottom: 16 }}>
+        <div className="row" style={{ gap: 10, alignItems: "flex-start" }}>
+          <textarea className="input" rows={2} style={{ flex: 1, resize: "vertical" }} placeholder="¿Qué quieres saber de tu plantilla?"
+            value={question} onChange={(e) => setQuestion(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) run(); }} />
+          <button className="btn btn-accent" disabled={busy} onClick={() => run()} style={{ whiteSpace: "nowrap" }}>{busy ? "Generando…" : <><Sparkles size={14} />Generar reporte</>}</button>
+        </div>
+
+        {/* Smart filters */}
+        {(needsArea || needsMes) && (
+          <div className="row" style={{ gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+            {needsArea && (
+              <div>
+                <label className="fld">Área</label>
+                <select className="select" value={dept} onChange={(e) => setDept(e.target.value)} style={{ minWidth: 180 }}>
+                  <option value="">— Todas —</option>
+                  {departments.map((d) => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
+            )}
+            {needsMes && (
+              <div>
+                <label className="fld">Mes</label>
+                <input className="input" type="month" value={mes} onChange={(e) => setMes(e.target.value)} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Chips precargados */}
+        <div style={{ marginTop: 14 }}>
+          <div className="muted2" style={{ fontSize: 11, marginBottom: 7 }}>Preguntas sugeridas · clic para usar</div>
+          <div className="row" style={{ gap: 7, flexWrap: "wrap" }}>
+            {PRELOADED_QUESTIONS.map((q, i) => (
+              <button key={i} className="qopt" style={{ fontSize: 11.5, padding: "6px 10px" }} onClick={() => setQuestion(q)}>{q}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Reportes guardados */}
+      {saved.length > 0 && (
+        <div className="glass-2" style={{ padding: 14, marginBottom: 16 }}>
+          <div className="muted2" style={{ fontSize: 11, marginBottom: 8 }}>Mis reportes guardados</div>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+            {saved.map((t) => (
+              <span key={t.id} className="chip" style={{ cursor: "pointer" }} onClick={() => runSaved(t)}>
+                <RefreshCw size={10} />{t.nombre}
+                <X size={11} style={{ marginLeft: 4, opacity: .6 }} onClick={async (e) => { e.stopPropagation(); try { await deleteReportTemplate(token, t.id); reloadSaved(); } catch (er) { toast(er.message, "err"); } }} />
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Output */}
+      {busy && <div className="muted" style={{ fontSize: 13, padding: 20 }}>La IA está interpretando tu pregunta y consultando los datos…</div>}
+      {report && !busy && (
+        <div className="glass" style={{ padding: 20 }}>
+          {/* KPIs */}
+          <div className="row" style={{ gap: 14, flexWrap: "wrap", marginBottom: 16 }}>
+            {report.summary.map((s, i) => (
+              <div key={i} className="glass-2" style={{ padding: "12px 16px", minWidth: 140 }}>
+                <div className="kpi" style={{ fontSize: 24, color: i === 0 ? "var(--cyan)" : "var(--text)" }}>{fmtVal(s.value, s.kind)}</div>
+                <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Narrativa IA */}
+          <div className="glass-2" style={{ padding: 14, marginBottom: 16, borderLeft: "3px solid var(--cyan)" }}>
+            <div className="row" style={{ gap: 7, marginBottom: 5 }}><Sparkles size={13} color="var(--cyan)" /><span style={{ fontSize: 12, fontWeight: 600 }}>Interpretación</span></div>
+            <div className="muted" style={{ fontSize: 13, lineHeight: 1.55 }}>{report.narrative}</div>
+          </div>
+
+          {/* Bar chart */}
+          {report.chartData.length > 0 && (
+            <ResponsiveContainer width="100%" height={Math.max(180, report.chartData.length * 34)}>
+              <BarChart data={report.chartData} layout="vertical" margin={{ left: 8, right: 24 }}>
+                <XAxis type="number" hide />
+                <YAxis type="category" dataKey="name" width={140} tick={{ fill: "var(--muted)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={tipStyle} cursor={{ fill: "rgba(255,255,255,.04)" }} formatter={(v) => fmtVal(v, report.metricKind)} />
+                <Bar dataKey="value" fill="var(--cyan)" radius={[0, 6, 6, 0]} barSize={16} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+
+          {/* Tabla */}
+          <table className="tbl" style={{ width: "100%", marginTop: 16, fontSize: 12.5 }}>
+            <thead><tr><th>{report.dimLabel}</th><th>{report.metricLabel}</th></tr></thead>
+            <tbody>{report.chartData.map((r, i) => <tr key={i}><td style={{ padding: "8px 12px" }}>{r.name}</td><td style={{ padding: "8px 12px" }} className="mono">{fmtVal(r.value, report.metricKind)}</td></tr>)}</tbody>
+          </table>
+
+          {/* Acciones */}
+          <div className="row" style={{ gap: 10, marginTop: 18 }}>
+            <button className="btn" onClick={descargarCSV}><Download size={14} />Descargar CSV</button>
+            <button className="btn" onClick={() => setShowSave(true)}><Plus size={14} />Guardar como plantilla</button>
+          </div>
+
+          {showSave && (
+            <div className="row" style={{ gap: 8, marginTop: 12 }}>
+              <input className="input" placeholder="Nombre del reporte" value={saveName} onChange={(e) => setSaveName(e.target.value)} style={{ maxWidth: 280 }} />
+              <button className="btn btn-accent" onClick={guardarPlantilla} disabled={!saveName.trim()}>Guardar</button>
+              <button className="btn" onClick={() => setShowSave(false)}>Cancelar</button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FiltroDash({ staff }) {
   const [dim, setDim] = useState("depto"); const [chart, setChart] = useState("bar"); const [fecha, setFecha] = useState(todayISO);
   const [cmpMode, setCmpMode] = useState(false); const [a, setA] = useState(""); const [b, setB] = useState("");
@@ -5269,7 +6208,7 @@ function FiltroDash({ staff }) {
   const narrative = cmpMode && a && b
     ? `Al ${fecha}, ${DIMS[dim]} "${a}" agrupa ${(data.find((d) => d.name === a)?.value) || 0} colaboradores frente a ${(data.find((d) => d.name === b)?.value) || 0} de "${b}".`
     : `Al ${fecha}, la plantilla de ${total} colaboradores se distribuye en ${data.length} ${DIMS[dim].toLowerCase()}(s). Mayor concentración: "${data[0]?.name}" (${data[0]?.value}).`;
-  const gen = () => { const rows = cmp.map((d) => `"${d.name}",${d.value},"${((d.value / total) * 100).toFixed(1)}%"`).join("\n"); download(`reporte_${dim}_${fecha}.csv`, `Reporte CÓDICE — ${ORG.name}\nDimensión:,${DIMS[dim]}\nFecha de corte:,${fecha}\nTotal:,${total}\n\n${DIMS[dim]},Conteo,Porcentaje\n${rows}\n\nResumen,"${narrative}"`, "text/csv"); toast("Reporte descargado (.csv)"); };
+  const gen = () => { const rows = cmp.map((d) => `"${d.name}",${d.value},"${((d.value / total) * 100).toFixed(1)}%"`).join("\n"); download(`reporte_${dim}_${fecha}.csv`, `Reporte KODICE — ${ORG.name}\nDimensión:,${DIMS[dim]}\nFecha de corte:,${fecha}\nTotal:,${total}\n\n${DIMS[dim]},Conteo,Porcentaje\n${rows}\n\nResumen,"${narrative}"`, "text/csv"); toast("Reporte descargado (.csv)"); };
   return (
     <div className="fadein">
       <Eyebrow>Filtro → Tablero · reportes al instante</Eyebrow>
@@ -5342,9 +6281,9 @@ function Consultor() {
       <h1 style={{ fontSize: 22, fontWeight: 700, margin: "5px 0 6px" }}>Consultoría avanzada</h1>
       <p className="muted" style={{ fontSize: 13, marginBottom: 16, maxWidth: 640 }}>Asistente conectado a IA. Orientación sobre LFT, contratos, finiquitos y procesos de RH. No constituye asesoría legal formal.</p>
       <ChatPanel placeholder="Pregunta sobre LFT, contratos, finiquitos, jornada 40h…"
-        intro={`Soy el consultor de CÓDICE para ${ORG.name}. Puedo orientarte sobre la LFT, tipos de contrato, cálculo de prestaciones y la transición de la jornada de 40 horas (reforma 2026). ¿Qué necesitas resolver?`}
+        intro={`Soy el consultor de KODICE para ${ORG.name}. Puedo orientarte sobre la LFT, tipos de contrato, cálculo de prestaciones y la transición de la jornada de 40 horas (reforma 2026). ¿Qué necesitas resolver?`}
         quick={["¿Cómo calculo un finiquito?", "Finiquito vs liquidación", "¿Cómo aplica la jornada de 40 horas en 2026?", "Inocuidad y obligaciones del trabajador"]}
-        systemPrompt={`Eres un consultor experto en Recursos Humanos y en la Ley Federal del Trabajo (LFT) de México, integrado en el software CÓDICE para ${ORG.name}, una empresa de empaque y procesamiento de alimentos en CDMX. Responde en español, claro y práctico. Cuando cites la LFT menciona el artículo aproximado. Para jornada usa la reforma 2026: reducción gradual de 48h (2026) a 40h (2030), ~2h/año, sin reducir salario, con registro electrónico obligatorio. Aclara que el "aguinaldo digno" (30 días) sigue siendo propuesta. Sé conciso y cierra recordando que es orientación general, no asesoría jurídica formal.`} />
+        systemPrompt={`Eres un consultor experto en Recursos Humanos y en la Ley Federal del Trabajo (LFT) de México, integrado en el software KODICE para ${ORG.name}, una empresa de empaque y procesamiento de alimentos en CDMX. Responde en español, claro y práctico. Cuando cites la LFT menciona el artículo aproximado. Para jornada usa la reforma 2026: reducción gradual de 48h (2026) a 40h (2030), ~2h/año, sin reducir salario, con registro electrónico obligatorio. Aclara que el "aguinaldo digno" (30 días) sigue siendo propuesta. Sé conciso y cierra recordando que es orientación general, no asesoría jurídica formal.`} />
     </div>
   );
 }
@@ -5365,7 +6304,7 @@ function Autoservicio({ staff }) {
         <ChatPanel placeholder="Solicita vacaciones, una constancia, o actualiza tus datos…"
           intro={`Hola ${me.nombre.split(" ")[0]}. Soy tu asistente de RH en ${ORG.name}. Puedo ayudarte a solicitar vacaciones, pedir constancias, revisar prestaciones o canalizar una solicitud a Recursos Humanos. ¿Qué necesitas?`}
           quick={["Solicitar vacaciones", "Pedir constancia laboral", "¿Cuántos días de vacaciones tengo?", "Cambio de turno"]}
-          systemPrompt={`Eres el asistente de autoservicio de RH en CÓDICE para ${ORG.name} (empaque de alimentos, CDMX), atendiendo al colaborador ${me.nombre} (${me.puesto}, turno ${me.turno}, ${me.antiguedad} años, ${dv} días de vacaciones, estatus ${me.status}). Responde en español, cálido y breve. Puedes explicar prestaciones y guiar para solicitar vacaciones/permisos/constancias/cambios de turno, registrando la solicitud hacia RH. Para cambios sensibles (puesto, salario, turno) explica que generas una solicitud que RH debe aprobar. Si preguntan de LFT, da orientación general (reforma 2026, jornada 40h gradual) y recuerda que no es asesoría legal formal.`} />
+          systemPrompt={`Eres el asistente de autoservicio de RH en KODICE para ${ORG.name} (empaque de alimentos, CDMX), atendiendo al colaborador ${me.nombre} (${me.puesto}, turno ${me.turno}, ${me.antiguedad} años, ${dv} días de vacaciones, estatus ${me.status}). Responde en español, cálido y breve. Puedes explicar prestaciones y guiar para solicitar vacaciones/permisos/constancias/cambios de turno, registrando la solicitud hacia RH. Para cambios sensibles (puesto, salario, turno) explica que generas una solicitud que RH debe aprobar. Si preguntan de LFT, da orientación general (reforma 2026, jornada 40h gradual) y recuerda que no es asesoría legal formal.`} />
       </div>
     </div>
   );
@@ -5732,7 +6671,7 @@ function constanciaDoc(curso, nombre, calif) {
   <p style="margin-top:14px">Calificación obtenida: <b>${calif}/100</b></p>
   <p class="meta">Folio ${folio} · ${ORG.city} · ${todayISO} · Conforme al programa interno de capacitación y adiestramiento (arts. 153-A a 153-X LFT).</p>
   <div class="b"><div>Recursos Humanos / Workforce</div><div>Colaborador</div></div>
-  <p style="margin-top:30px;font-size:10px;color:#999">Emitida por CÓDICE · registro digital de capacitación</p></body></html>`;
+  <p style="margin-top:30px;font-size:10px;color:#999">Emitida por KODICE · registro digital de capacitación</p></body></html>`;
 }
 function Capacitacion({ staff }) {
   const [cursos, setCursos] = useState(CURSOS_SEED);
@@ -5846,7 +6785,7 @@ function Senalizacion() {
           <ChevronRight size={18} className="handle" style={{ cursor: "pointer" }} onClick={() => setI((x) => (x + 1) % SLIDES.length)} />
         </div>
       </div>
-      <div className="muted2" style={{ fontSize: 11, marginTop: 12 }}>Rota automáticamente cada 5s. En kiosco: abre "Modo pantalla" en la TV de piso. Las fuentes (seguridad, calidad, producción, reconocimientos) se alimentan desde los módulos de CÓDICE.</div>
+      <div className="muted2" style={{ fontSize: 11, marginTop: 12 }}>Rota automáticamente cada 5s. En kiosco: abre "Modo pantalla" en la TV de piso. Las fuentes (seguridad, calidad, producción, reconocimientos) se alimentan desde los módulos de KODICE.</div>
     </div>
   );
 }
@@ -6623,7 +7562,7 @@ function FloatingAIAssistant({ view, staff, solicitudes, attendance, token, go }
             transition={{ type: "spring", stiffness: 320, damping: 28 }}
           >
             <div className="row" style={{ justifyContent: "space-between", padding: "12px 14px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
-              <span style={{ fontWeight: 700, fontSize: 13 }}>✦ Asistente CÓDICE</span>
+              <span style={{ fontWeight: 700, fontSize: 13 }}>✦ Asistente KODICE</span>
               <X size={16} style={{ cursor: "pointer" }} onClick={() => setOpen(false)} />
             </div>
 
@@ -6671,7 +7610,7 @@ const NAV = [
   ["solicitudes", "Solicitudes", Inbox], ["indicadores", "Indicadores WKF", Activity],
   ["asistencia", "Asistencia", UserCheck],
   ["_s", "Cumplimiento"],
-  ["contratos", "Contratos", FileSignature], ["lft", "Módulo LFT", Scale], ["filtro", "Filtro → Tablero", Filter],
+  ["contratos", "Contratos", FileSignature], ["lft", "Módulo LFT", Scale], ["filtro", "Reportes al instante", Filter],
   ["radar", "Radar", RadarIcon],
   ["_s", "Integraciones"],
   ["conectores", "Conectores", Plug], ["whatsapp", "WhatsApp", MessageSquare],
@@ -6897,7 +7836,7 @@ export default function App() {
         <div className="bgfield"><div className="blob b1" /><div className="blob b2" /><div className="blob b3" /><div className="gridov" /></div>
         <div style={{ position: "relative", zIndex: 1, minHeight: "100vh", display: "grid", placeItems: "center" }}>
           <div className="glass" style={{ padding: 28, textAlign: "center" }}>
-            <Eyebrow>CÓDICE · GFP</Eyebrow>
+            <Eyebrow>KODICE · GFP</Eyebrow>
             <div style={{ marginTop: 10 }}>Verificando sesión…</div>
           </div>
         </div>
@@ -6925,7 +7864,7 @@ export default function App() {
         <aside className="glass" style={{ width: 232, margin: 14, padding: 16, borderRadius: 20, display: "flex", flexDirection: "column", position: "sticky", top: 14, height: "calc(100vh - 28px)" }}>
           <div className="row" style={{ gap: 10, marginBottom: 22, padding: "2px 4px" }}>
             <div style={{ width: 34, height: 34, borderRadius: 10, background: "linear-gradient(135deg,var(--cyan),var(--violet))", display: "grid", placeItems: "center" }}><Sparkles size={18} color="#04060a" /></div>
-            <div><div style={{ fontWeight: 700, fontSize: 16, letterSpacing: ".02em" }}>CÓDICE</div><div className="muted2" style={{ fontSize: 9.5, letterSpacing: ".14em", textTransform: "uppercase" }}>Control · LFT</div></div>
+            <div><div style={{ fontWeight: 700, fontSize: 16, letterSpacing: ".02em" }}>KODICE</div><div className="muted2" style={{ fontSize: 9.5, letterSpacing: ".14em", textTransform: "uppercase" }}>Control · LFT</div></div>
           </div>
           <div className="glass-2" style={{ padding: 12, marginBottom: 18 }}>
             <div className="row" style={{ gap: 9 }}><div style={{ width: 30, height: 30, borderRadius: 9, background: "rgba(255,255,255,.06)", display: "grid", placeItems: "center" }}><Factory size={15} className="muted" /></div><div style={{ minWidth: 0 }}><div style={{ fontWeight: 600, fontSize: 12.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ORG.name}</div><div className="muted2" style={{ fontSize: 10 }}>{ORG.city} · {staff.length} pers.</div></div></div>
@@ -6954,9 +7893,9 @@ export default function App() {
           {view === "conectores" && <Conectores token={token} socket={socket} tenantId={tenantId} />}
           {view === "whatsapp" && <WhatsAppPage token={token} />}
           {view === "asistencia" && <Asistencia staff={staff} attendance={attendance} openExpediente={openExpediente} token={token} socket={socket} />}
-          {view === "contratos" && <Contratos staff={staff} />}
-          {view === "lft" && <LFT token={token} />}
-          {view === "filtro" && <FiltroDash staff={staff} />}
+          {view === "contratos" && <Contratos staff={staff} token={token} />}
+          {view === "lft" && <LFT token={token} staff={staff} />}
+          {view === "filtro" && <ReportesInstante token={token} staff={staff} />}
           {view === "radar" && <RadarPage staff={staff} token={token} />}
           {view === "capacitacion" && <Capacitacion staff={staff} />}
           {view === "senalizacion" && <Senalizacion />}

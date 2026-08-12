@@ -23,6 +23,7 @@ import employeeRoutes   from './routes/employees'
 import healthRoutes     from './routes/health'
 import riskRoutes       from './routes/risk'
 import contractRoutes   from './routes/contracts'
+import reportRoutes     from './routes/reports'
 import payrollRoutes    from './routes/payroll'
 import requestRoutes    from './routes/requests'
 import courseRoutes     from './routes/courses'
@@ -152,6 +153,7 @@ app.use('/api/employees',  riskRoutes)
 app.use('/api/employees',  employeeRoutes)
 app.use('/api/employees',  healthRoutes)
 app.use('/api/contracts',  contractRoutes)
+app.use('/api/reports',    reportRoutes)
 app.use('/api/payroll',    payrollRoutes)
 app.use('/api/requests',   requestRoutes)
 app.use('/api/courses',    courseRoutes)
