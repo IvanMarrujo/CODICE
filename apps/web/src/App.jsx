@@ -12,11 +12,12 @@ import {
   ClipboardCheck, UserCheck, Zap, Plug, QrCode, DollarSign, Upload,
   Pause, Play, Trash2, Unplug, Pencil, CheckSquare, Square, Lock, FileHeart, MessageSquare, Copy,
   Radar as RadarIcon, ChevronDown, ExternalLink, Tag, LayoutGrid, List as ListIcon,
+  LogOut, User,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { io } from "socket.io-client";
 import {
-  login, fetchEmployees, mapEmployee, fetchAttendance,
+  login, logout, fetchEmployees, mapEmployee, fetchAttendance,
   fetchSyncLogLatest, fetchPayroll, fetchPayrollSummary, fetchPayrollLatestByEmployee, fetchPayrollExplain,
   uploadConnectorFile, fetchSyncLogHistory, previewExcel, previewCfdi,
   fetchConnectedSources, reloadConnectedSource, replaceConnectedSourceFile, setConnectedSourceAutoSync,
@@ -48,15 +49,10 @@ import {
   factorialStatus, factorialConnect, factorialPreview, factorialSync, factorialDisconnect,
 } from "./api.js";
 
-// Credenciales de auto-login del cockpit admin (tenant único GFP). Vienen de
-// env vars (VITE_ADMIN_EMAIL/VITE_ADMIN_PASSWORD) en vez de hardcodeadas en
-// el código fuente — igual terminan en el bundle público (es un auto-login
-// client-side), pero así no quedan pegadas en el historial de git.
-const AUTH = {
-  slug: "gfp",
-  email: import.meta.env.VITE_ADMIN_EMAIL || "admin@gfp.mx",
-  password: import.meta.env.VITE_ADMIN_PASSWORD || "",
-};
+// Sesión del cockpit admin persistida solo si el usuario marca "Mantener
+// sesión" — sessionStorage (no localStorage) para que se limpie sola al
+// cerrar la pestaña, ver AdminLoginScreen/doLogin más abajo.
+const ADMIN_SESSION_KEY = "codice_admin_session";
 
 /* ============================================================
    CÓDICE · Control de personal con LFT en línea
@@ -226,6 +222,30 @@ label.fld{display:block;font-size:11px;color:var(--muted);margin-bottom:5px;font
   background:rgba(86,212,240,.12);color:#cdf3fc;display:inline-flex;align-items:center;gap:5px}
 .filter-chip button{background:none;border:none;color:inherit;cursor:pointer;display:inline-flex;padding:2px;border-radius:50%}
 .filter-chip button:hover{background:rgba(255,255,255,.15)}
+
+.admin-login{position:relative;z-index:1;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 20px}
+.admin-login-logo{font-size:32px;font-weight:700;letter-spacing:-.01em;color:var(--cyan);text-align:center;text-shadow:0 0 40px rgba(86,212,240,.4)}
+.admin-login-sub{font-size:13px;color:var(--muted);text-align:center;margin-top:6px;letter-spacing:.02em}
+.admin-login-card{width:380px;max-width:92vw;margin-top:44px;padding:28px}
+.admin-login-label{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:20px;text-align:center}
+.admin-login-field{margin-bottom:16px}
+.admin-login-field label{display:block;font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:500}
+.admin-login-helper{font-size:10.5px;color:var(--muted-2);margin-top:5px}
+.admin-login-input{width:100%;font-family:var(--font);font-size:14px;color:var(--text);background:transparent;
+  border:none;border-bottom:1px solid var(--border);padding:9px 2px;outline:none;transition:.15s border-color}
+.admin-login-input:focus{border-bottom-color:var(--cyan)}
+.admin-login-input::placeholder{color:var(--muted-2)}
+.admin-login-remember{display:flex;align-items:center;gap:8px;margin:18px 0 20px;font-size:12.5px;color:var(--muted);cursor:pointer;user-select:none}
+.admin-login-btn{width:100%;height:52px;border-radius:12px;border:none;color:#fff;font-family:var(--font);font-size:14.5px;font-weight:700;
+  background:linear-gradient(135deg,#2563eb,#1d4ed8);box-shadow:0 4px 14px rgba(37,99,235,.4);
+  display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;transition:.15s}
+.admin-login-btn:disabled{opacity:.55;cursor:default}
+.admin-login-btn:active{transform:scale(.99)}
+.admin-login-error{margin-top:14px;text-align:center;font-size:12px;font-weight:600;color:#fca5a5;
+  background:rgba(251,113,133,.14);border:1px solid rgba(251,113,133,.32);border-radius:999px;padding:8px 14px}
+.admin-login-help{margin-top:22px;text-align:center;font-size:11px;color:var(--muted-2)}
+.admin-greet{position:fixed;inset:0;z-index:200;display:grid;place-items:center;background:var(--bg);pointer-events:none}
+.admin-greet-text{font-size:22px;font-weight:600;color:var(--text);letter-spacing:-.01em}
 `;
 
 /* ---------- helpers ---------- */
@@ -6661,14 +6681,124 @@ const NAV = [
   ["supervisores", "Supervisores", UserCheck],
 ];
 
+// ── Login del cockpit admin ──────────────────────────────────
+// Reemplaza el auto-login anterior (credenciales fijas embebidas). Mismo
+// fondo/glassmorphism que las pantallas de loading/error de abajo, pero con
+// grid sutil en vez de constelación (ver .gridov) — look más "enterprise",
+// distinto del portal del colaborador (EmpleadoShell).
+function AdminLoginScreen({ onLogin }) {
+  const [slug, setSlug] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [remember, setRemember] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [errorKey, setErrorKey] = useState(0);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!slug.trim() || !email.trim() || !password || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onLogin({ slug: slug.trim(), email: email.trim(), password, rememberMe: remember });
+    } catch {
+      setError("Credenciales incorrectas");
+      setErrorKey((k) => k + 1);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="codice">
+      <style>{CSS}</style>
+      <div className="bgfield"><div className="blob b1" /><div className="blob b2" /><div className="blob b3" /><div className="gridov" /></div>
+      <div className="admin-login">
+        <div className="admin-login-logo">✦ KODICE</div>
+        <div className="admin-login-sub">Control · LFT</div>
+        <div className="glass admin-login-card">
+          <div className="admin-login-label">Acceso al sistema</div>
+          <form onSubmit={submit}>
+            <div className="admin-login-field">
+              <label>Correo</label>
+              <input
+                className="admin-login-input" type="email" placeholder="correo@empresa.com" autoComplete="username"
+                value={email} onChange={(e) => setEmail(e.target.value)}
+              />
+            </div>
+            <div className="admin-login-field">
+              <label>Empresa (slug)</label>
+              <input
+                className="admin-login-input" placeholder="gfp"
+                value={slug} onChange={(e) => setSlug(e.target.value)}
+              />
+              <div className="admin-login-helper">Tu identificador de empresa</div>
+            </div>
+            <div className="admin-login-field">
+              <label>Contraseña</label>
+              <input
+                className="admin-login-input" type="password" placeholder="Contraseña" autoComplete="current-password"
+                value={password} onChange={(e) => setPassword(e.target.value)}
+              />
+            </div>
+            <label className="admin-login-remember">
+              <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+              Mantener sesión
+            </label>
+            <button
+              type="submit" className="admin-login-btn"
+              disabled={busy || !slug.trim() || !email.trim() || !password}
+            >
+              {busy ? <RefreshCw size={16} className="spin" /> : null} Iniciar sesión
+            </button>
+            <AnimatePresence mode="wait">
+              {error && (
+                <motion.div
+                  key={errorKey}
+                  className="admin-login-error"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  {error}
+                </motion.div>
+              )}
+            </AnimatePresence>
+            <div className="admin-login-help">¿Olvidaste tu acceso? Contacta a soporte@kodice.mx</div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Overlay breve de bienvenida tras un login exitoso — se autodescarta, ver
+// dismissAfter en App(). El dashboard ya está montado detrás.
+function AdminGreetOverlay({ name }) {
+  return (
+    <motion.div
+      className="admin-greet"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1, transition: { duration: 0.5 } }}
+      exit={{ opacity: 0, transition: { duration: 0.5 } }}
+    >
+      <div className="admin-greet-text">Bienvenido, {name}</div>
+    </motion.div>
+  );
+}
+
 export default function App() {
   const [view, setView] = useState("cockpit");
   const [staff, setStaff] = useState([]);
-  const [boot, setBoot] = useState({ status: "loading", error: null });
+  const [boot, setBoot] = useState({ status: "checking", error: null });
   const [solicitudes, setSolicitudes] = useState(SOLICITUDES_SEED);
   const [resueltas, setResueltas] = useState([]);
   const [toasts, setToasts] = useState([]);
   const [token, setToken] = useState(null);
+  const [refreshToken, setRefreshToken] = useState(null);
+  const [adminUser, setAdminUser] = useState(null);
+  const [greetName, setGreetName] = useState(null);
   const [tenantId, setTenantId] = useState(null);
   const [socket, setSocket] = useState(null);
   const [expedienteEmp, setExpedienteEmp] = useState(null);
@@ -6678,23 +6808,58 @@ export default function App() {
   const goToPlantillaStatus = useCallback((status) => { setPlantillaFilter(status); setView("plantilla"); }, []);
   useEffect(() => { _toast = (msg, kind = "ok") => { const id = Math.random(); setToasts((t) => [...t, { id, msg, kind }]); setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 2600); }; }, []);
 
-  const loadFromApi = useCallback(async () => {
-    setBoot({ status: "loading", error: null });
-    try {
-      const { accessToken, tenant } = await login(AUTH);
-      const { data } = await fetchEmployees(accessToken);
-      setStaff(data.map(mapEmployee));
-      setToken(accessToken);
-      setTenantId(tenant?.id ?? null);
-      setBoot({ status: "ready", error: null });
-    } catch (e) {
-      setBoot({ status: "error", error: e.message });
-    }
+  // Aplica una sesión ya autenticada (accessToken/refreshToken/user/tenant) —
+  // usado tanto por doLogin (login fresco) como por la restauración desde
+  // sessionStorage al montar (ver useEffect de abajo).
+  const applySession = useCallback(async ({ accessToken, refreshToken: rt, user, tenant }) => {
+    const { data } = await fetchEmployees(accessToken);
+    setStaff(data.map(mapEmployee));
+    setToken(accessToken);
+    setRefreshToken(rt);
+    setAdminUser(user);
+    setTenantId(tenant?.id ?? null);
+    setBoot({ status: "ready", error: null });
   }, []);
-  useEffect(() => { loadFromApi(); }, [loadFromApi]);
+
+  // Restauración silenciosa: si "Mantener sesión" quedó marcado en un login
+  // previo (misma pestaña), evita mostrar el login de nuevo. Si falla
+  // (token vencido, red, etc.) cae al login sin mostrar error — no es un
+  // fallo del usuario, solo una sesión que ya no es válida.
+  useEffect(() => {
+    const raw = sessionStorage.getItem(ADMIN_SESSION_KEY);
+    if (!raw) { setBoot({ status: "login", error: null }); return; }
+    let saved;
+    try { saved = JSON.parse(raw); } catch { saved = null; }
+    if (!saved) { sessionStorage.removeItem(ADMIN_SESSION_KEY); setBoot({ status: "login", error: null }); return; }
+    applySession(saved).catch(() => {
+      sessionStorage.removeItem(ADMIN_SESSION_KEY);
+      setBoot({ status: "login", error: null });
+    });
+  }, [applySession]);
+
+  const doLogin = useCallback(async ({ slug, email, password, rememberMe }) => {
+    const session = await login({ slug, email, password });
+    await applySession(session);
+    if (rememberMe) sessionStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(session));
+    setGreetName(session.user?.firstName || null);
+  }, [applySession]);
+
+  const doLogout = useCallback(async () => {
+    try { if (refreshToken) await logout(refreshToken); } catch { /* logout es best-effort — igual limpiamos sesión local */ }
+    sessionStorage.removeItem(ADMIN_SESSION_KEY);
+    setToken(null); setRefreshToken(null); setAdminUser(null); setTenantId(null);
+    setStaff([]); setSocket(null);
+    setBoot({ status: "login", error: null });
+  }, [refreshToken]);
+
+  useEffect(() => {
+    if (!greetName) return;
+    const t = setTimeout(() => setGreetName(null), 1800);
+    return () => clearTimeout(t);
+  }, [greetName]);
 
   // Refetch ligero de la plantilla tras crear/editar/dar de baja — a
-  // diferencia de loadFromApi() no vuelve a hacer login, solo relee employees.
+  // diferencia de applySession() no vuelve a hacer login, solo relee employees.
   const refreshStaff = useCallback(async () => {
     if (!token) return;
     try {
@@ -6726,32 +6891,21 @@ export default function App() {
 
   const attendance = useAttendance(token, socket);
 
-  if (boot.status === "loading") {
+  if (boot.status === "checking") {
     return (
       <div className="codice"><style>{CSS}</style>
         <div className="bgfield"><div className="blob b1" /><div className="blob b2" /><div className="blob b3" /><div className="gridov" /></div>
         <div style={{ position: "relative", zIndex: 1, minHeight: "100vh", display: "grid", placeItems: "center" }}>
           <div className="glass" style={{ padding: 28, textAlign: "center" }}>
             <Eyebrow>CÓDICE · GFP</Eyebrow>
-            <div style={{ marginTop: 10 }}>Iniciando sesión y cargando plantilla…</div>
+            <div style={{ marginTop: 10 }}>Verificando sesión…</div>
           </div>
         </div>
       </div>
     );
   }
-  if (boot.status === "error") {
-    return (
-      <div className="codice"><style>{CSS}</style>
-        <div className="bgfield"><div className="blob b1" /><div className="blob b2" /><div className="blob b3" /><div className="gridov" /></div>
-        <div style={{ position: "relative", zIndex: 1, minHeight: "100vh", display: "grid", placeItems: "center" }}>
-          <div className="glass" style={{ padding: 28, textAlign: "center", maxWidth: 420 }}>
-            <Eyebrow>Error de conexión</Eyebrow>
-            <div style={{ marginTop: 10, color: "var(--rose)" }}>{boot.error}</div>
-            <button className="btn btn-accent" style={{ marginTop: 16 }} onClick={loadFromApi}><RefreshCw size={14} />Reintentar</button>
-          </div>
-        </div>
-      </div>
-    );
+  if (boot.status === "login") {
+    return <AdminLoginScreen onLogin={doLogin} />;
   }
 
   const resolver = (id, ok) => {
@@ -6781,6 +6935,16 @@ export default function App() {
               ? <div key={idx} className="sec">{it[1]}</div>
               : <div key={it[0]} className={`navitem ${view === it[0] ? "on" : ""}`} onClick={() => setView(it[0])}>{React.createElement(it[2], { size: 17 })} {it[1]}</div>)}
           </nav>
+          <div className="glass-2 row" style={{ padding: 10, marginTop: 10, gap: 8 }}>
+            <div style={{ width: 28, height: 28, borderRadius: 8, background: "rgba(255,255,255,.06)", display: "grid", placeItems: "center", flexShrink: 0 }}>
+              <User size={14} className="muted" />
+            </div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{adminUser?.firstName} {adminUser?.lastName}</div>
+              <div className="muted2" style={{ fontSize: 9.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{adminUser?.email}</div>
+            </div>
+            <button className="btn btn-sm" title="Cerrar sesión" onClick={doLogout}><LogOut size={13} /></button>
+          </div>
         </aside>
         <main style={{ flex: 1, padding: "20px 26px 40px", minWidth: 0, overflowX: "hidden" }}>
           {view === "cockpit" && <Cockpit staff={staff} solicitudes={solicitudes} resolver={resolver} go={setView} attendance={attendance} openExpediente={openExpediente} token={token} onFilterPlantillaStatus={goToPlantillaStatus} />}
@@ -6802,6 +6966,7 @@ export default function App() {
         </main>
       </div>
       <FloatingAIAssistant view={view} staff={staff} solicitudes={solicitudes} attendance={attendance} token={token} go={setView} />
+      <AnimatePresence>{greetName && <AdminGreetOverlay key="greet" name={greetName} />}</AnimatePresence>
       {expedienteEmp && (
         <ProfileDrawer
           e={expedienteEmp}
