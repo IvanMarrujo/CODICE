@@ -69,8 +69,8 @@ function publicUser(user: { id: string; email: string; firstName: string; lastNa
   return { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role }
 }
 
-function publicTenant(tenant: { id: string; slug: string; name: string; plan: string; status: string }) {
-  return { id: tenant.id, slug: tenant.slug, name: tenant.name, plan: tenant.plan, status: tenant.status }
+function publicTenant(tenant: { id: string; slug: string; name: string; plan: string; status: string; city: string | null; industry: string }) {
+  return { id: tenant.id, slug: tenant.slug, name: tenant.name, plan: tenant.plan, status: tenant.status, city: tenant.city, industry: tenant.industry }
 }
 
 // Ventana anti fuerza bruta: 10 intentos / 15 min por IP+slug+email.

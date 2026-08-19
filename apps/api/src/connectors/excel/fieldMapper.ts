@@ -74,6 +74,7 @@ const ALIASES: Record<CanonicalField, string[]> = {
     'BASE_IMSS', 'SALARIO_BASE_IMSS', 'SBC', 'SDI',
     'SAL_BASE_COT', 'SALARIO_BASE_COTIZACION', 'SALARIO_DIARIO_INTEGRADO',
     'SAL_INT', 'SUELDO_INTEGRADO', 'BASE_COTIZACION',
+    'SAL_DIARIO_INTEGRADO', 'S_D_I',
   ],
   seniority_years: [
     'antiguedad_anios', 'ANTIGUEDAD_ANIOS', 'antiguedad', 'anios_servicio',
@@ -82,6 +83,7 @@ const ALIASES: Record<CanonicalField, string[]> = {
   department: [
     'departamento', 'depto', 'area', 'área',
     'CVE_DEPTO', 'CENTRO_COSTO', 'DEPART', 'NOM_DEPTO',
+    'CVE_CENTRO_COSTO', 'CENTRO_DE_COSTO', 'COST_CENTER', 'CC',
   ],
   position: [
     'puesto', 'cargo', 'posicion', 'posición',
@@ -94,11 +96,13 @@ const ALIASES: Record<CanonicalField, string[]> = {
   shift: [
     'turno', 'shift',
     'CVE_TURNO', 'JORNADA', 'HORARIO',
+    'TIPO_JORNADA', 'JORNADA_LABORAL', 'HORAS_JORNADA',
   ],
   hire_date: [
     'fecha ingreso', 'f ingreso', 'ingreso', 'hire date',
     'FECHA_INGRESO', 'FEC_INGRESO', 'FINGRESO', 'FECHA_ALTA', 'FEC_ALTA',
     'FECHA_CONTRATACION', 'FCONTRAT', 'F_INGRESO',
+    'F_ALTA', 'FECHA_DE_ALTA', 'ALTA_IMSS', 'FECHA_INGRESO_IMSS',
   ],
   contract_type: [
     'contrato', 'tipo contrato',

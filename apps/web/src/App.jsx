@@ -56,21 +56,52 @@ const ADMIN_SESSION_KEY = "codice_admin_session";
 
 /* ============================================================
    CÓDICE · Control de personal con LFT en línea
-   Tenant único: Grupo Food Packing Co. (CDMX)
+   Multi-tenant: slug/email/password se capturan en la pantalla de
+   login (ver LoginScreen más abajo) y se resuelven vía POST
+   /api/auth/login — ya no hay auto-login ni tenant hardcodeado.
    Draggable real (mutación DOM + commit, snap a rejilla).
    AI chat conectado al endpoint Anthropic del artefacto.
    ============================================================ */
 
+// ORG son los datos de "marca" del tenant activo, usados en headers,
+// documentos generados (contratos, constancias) y el eyebrow del cockpit.
+// Se inicializa con placeholders neutros y se sobreescribe (mutación in-place,
+// no reasignación) justo después de un login exitoso con los datos reales del
+// tenant — ver doLogin(). deptos/plantas siguen siendo un catálogo fijo: el
+// modelo Tenant no guarda estructura organizacional propia todavía, así que
+// un tenant nuevo (ej. Vital Health) hereda este catálogo genérico hasta que
+// eso se modele explícitamente (fuera del alcance de este fix de auth).
+const INDUSTRY_LABEL = {
+  MANUFACTURA_ALIMENTOS:    "Empaque y procesamiento de alimentos",
+  DESPACHO_JURIDICO:        "Despacho jurídico",
+  LABORATORIO_CLINICO:      "Laboratorio clínico",
+  FABRICACION_SUPLEMENTOS:  "Fabricación de suplementos alimenticios",
+  MULTI_INDUSTRIA:          "Multi-industria",
+  RETAIL:                   "Retail",
+  LOGISTICA:                "Logística",
+  SERVICIOS:                "Servicios",
+  OTRO:                     "Otro",
+};
+
 const ORG = {
-  name: "Grupo Food Packing Co.",
-  short: "GFP",
-  kind: "Empaque y procesamiento de alimentos",
-  city: "Ciudad de México",
-  domain: "gfp.mx",
+  name: "—",
+  short: "—",
+  kind: "—",
+  city: "—",
+  domain: "",
   deptos: ["Producción", "Empaque", "Calidad e Inocuidad", "Almacén y Logística", "Mantenimiento", "Compras", "Administración", "Recursos Humanos", "Ventas", "Sistemas"],
   plantas: ["Planta Vallejo", "Planta Iztapalapa", "CEDIS Tláhuac", "Corporativo Polanco"],
   n: 150,
 };
+
+function applyTenantBranding(tenant) {
+  Object.assign(ORG, {
+    name:  tenant?.name || ORG.name,
+    short: (tenant?.slug || ORG.short).toUpperCase(),
+    city:  tenant?.city || ORG.city,
+    kind:  INDUSTRY_LABEL[tenant?.industry] || ORG.kind,
+  });
+}
 
 /* ---------- toast bus ---------- */
 let _toast = () => {};
@@ -1516,10 +1547,7 @@ function GamificationSummaryCard({ token, employeeId }) {
   );
 }
 
-function SbcCard({ token, employeeId }) {
-  const detail = useEmployeeDetail(token, employeeId);
-  if (detail.status === "loading") return null;
-  const emp = detail.data;
+function SbcCard({ emp }) {
   const sbc = emp?.salary_base_imss != null ? Number(emp.salary_base_imss) : null;
   if (sbc == null) return null;
   const dailySalary = emp?.daily_salary != null ? Number(emp.daily_salary) : null;
@@ -1554,8 +1582,51 @@ function SeniorityNote({ token, employeeId }) {
   );
 }
 
+// "centro_de_costo" -> "Centro de costo" — sin diccionario fijo: la llave
+// sale de lo que el usuario tecleó como nombre del campo personalizado
+// (ver customFieldKey en fieldMapper.ts), no de un enum conocido.
+function prettyFieldKey(key) {
+  const words = key.replace(/_/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function CustomFieldRow({ token, employeeId, fieldKey, label, value }) {
+  const [v, setV] = useState(value ?? "");
+  useEffect(() => { setV(value ?? ""); }, [value]);
+  const save = async () => {
+    if (v === (value ?? "")) return;
+    try {
+      await updateEmployee(token, employeeId, { customFields: { [fieldKey]: v } });
+      toast("Campo actualizado");
+    } catch (err) { toast(err.message, "no"); }
+  };
+  return (
+    <div>
+      <div className="muted2" style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 3 }}>{label}</div>
+      <input className="input" style={{ fontSize: 13 }} value={v} onChange={(ev) => setV(ev.target.value)} onBlur={save} />
+    </div>
+  );
+}
+
+function CustomFieldsCard({ token, employeeId, emp }) {
+  const entries = Object.entries(emp?.customFields || {});
+  if (entries.length === 0) return null;
+  return (
+    <div className="glass-2" style={{ padding: 14, marginBottom: 18 }}>
+      <Eyebrow>Campos adicionales</Eyebrow>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 9 }}>
+        {entries.map(([key, value]) => (
+          <CustomFieldRow key={key} token={token} employeeId={employeeId} fieldKey={key} label={prettyFieldKey(key)} value={value} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ResumenTab({ e, setStatus, update, token }) {
   const dv = diasVacaciones(e.antiguedad); const sd = e.salario / 30;
+  const detail = useEmployeeDetail(token, e.dbId);
+  const emp = detail.data;
   return (
     <>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 18 }}>
@@ -1568,7 +1639,8 @@ function ResumenTab({ e, setStatus, update, token }) {
       </div>
       <Eyebrow>Tipo de contrato</Eyebrow>
       <select className="select" style={{ margin: "9px 0 18px" }} value={e.contrato} onChange={(ev) => update({ contrato: ev.target.value })}>{CONTRATOS.map((c) => <option key={c}>{c}</option>)}</select>
-      <SbcCard token={token} employeeId={e.dbId} />
+      <SbcCard emp={emp} />
+      <CustomFieldsCard token={token} employeeId={e.dbId} emp={emp} />
       <GamificationSummaryCard token={token} employeeId={e.dbId} />
       <div className="glass-2" style={{ padding: 14 }}>
         <Eyebrow>Derechos LFT estimados</Eyebrow>
@@ -6810,8 +6882,12 @@ export default function App() {
 
   // Aplica una sesión ya autenticada (accessToken/refreshToken/user/tenant) —
   // usado tanto por doLogin (login fresco) como por la restauración desde
-  // sessionStorage al montar (ver useEffect de abajo).
+  // sessionStorage al montar (ver useEffect de abajo). applyTenantBranding
+  // muta ORG in-place con los datos reales del tenant (nombre/slug/ciudad/
+  // industria) — sin esto, el cockpit muestra branding de GFP sin importar
+  // qué tenant inició sesión (ver applyTenantBranding arriba).
   const applySession = useCallback(async ({ accessToken, refreshToken: rt, user, tenant }) => {
+    applyTenantBranding(tenant);
     const { data } = await fetchEmployees(accessToken);
     setStaff(data.map(mapEmployee));
     setToken(accessToken);
@@ -6897,7 +6973,7 @@ export default function App() {
         <div className="bgfield"><div className="blob b1" /><div className="blob b2" /><div className="blob b3" /><div className="gridov" /></div>
         <div style={{ position: "relative", zIndex: 1, minHeight: "100vh", display: "grid", placeItems: "center" }}>
           <div className="glass" style={{ padding: 28, textAlign: "center" }}>
-            <Eyebrow>CÓDICE · GFP</Eyebrow>
+            <Eyebrow>CÓDICE</Eyebrow>
             <div style={{ marginTop: 10 }}>Verificando sesión…</div>
           </div>
         </div>
