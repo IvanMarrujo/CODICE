@@ -128,10 +128,14 @@ async function odooExecuteKw(creds: OdooCredentials, model: string, method: stri
 // fila entera ("sin RFC ni employee_code" — ver connectors.ts). El id
 // interno de Odoo siempre existe, igual que Employee_ID en Zoho o el id de
 // item en Monday.
+// 'date_start' no existe en hr.employee desde Odoo 17 — el campo vigente es
+// 'first_contract_date' (fecha del primer contrato, computado desde
+// hr.contract). Confirmado contra una instancia real 17.0 Enterprise vía
+// fields_get; 'date_start' lanza "Invalid field" y tira el fetch completo.
 const EMPLOYEE_FIELDS = [
   'id', 'name', 'work_email', 'mobile_phone', 'department_id',
   'job_id', 'work_location_id', 'parent_id',
-  'date_start', 'active', 'barcode',
+  'first_contract_date', 'active', 'barcode',
 ]
 
 const PAGE_SIZE = 200
@@ -207,7 +211,7 @@ export function mapOdooRecordToEmployee(raw: Record<string, unknown>): EmployeeU
   out.employee_code    = str(raw['barcode']) || (raw['id'] != null ? String(raw['id']) : undefined)
   out.status           = raw['active'] === false ? 'Baja' : 'Activo'
 
-  const dateStart = str(raw['date_start'])
+  const dateStart = str(raw['first_contract_date'])
   if (dateStart) {
     const d = new Date(dateStart)
     if (!isNaN(d.getTime())) out.hire_date = d
