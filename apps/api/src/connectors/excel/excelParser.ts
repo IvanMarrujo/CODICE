@@ -190,7 +190,16 @@ export function previewExcelBuffer(buffer: Buffer, filename: string, maxPreviewR
 function mapRowValues(values: Partial<Record<CanonicalField, unknown>>, rowNumber: number): ParsedEmployeeRow {
   const out: ParsedEmployeeRow = { row: rowNumber }
 
-  if (values.full_name != null) {
+  // first_name/last_name mapeados directo (columnas ya separadas) tienen
+  // prioridad sobre full_name: son explícitos, no una inferencia heurística.
+  // Solo se usan si AMBOS llegan — un first_name sin last_name (o viceversa)
+  // no es un mapeo completo, se cae al split de full_name si también vino.
+  // Si ninguno de los dos casos aplica, out.first_name/last_name quedan
+  // undefined y el check de abajo tira el mismo error que hoy.
+  if (values.first_name != null && values.last_name != null) {
+    out.first_name = String(values.first_name).trim()
+    out.last_name  = String(values.last_name).trim()
+  } else if (values.full_name != null) {
     const { first_name, last_name } = splitFullName(String(values.full_name))
     out.first_name = first_name
     out.last_name  = last_name
