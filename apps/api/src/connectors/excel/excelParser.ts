@@ -187,6 +187,26 @@ export function previewExcelBuffer(buffer: Buffer, filename: string, maxPreviewR
   return { headers, preview: rows.slice(0, maxPreviewRows), totalRows: rows.length, errors, missingIdentifierCount }
 }
 
+// Códigos de una letra típicos de exports CONTPAQi/Nomipaq para el estatus
+// del empleado — el resto del sistema (attendance.ts, employees.ts
+// leaderboard/status-summary, supervisor.ts, whatsappWebhook.ts) filtra por
+// status = 'Activo' exacto, así que un código crudo sin normalizar deja al
+// empleado invisible para asistencia, gamificación, etc. sin que el import
+// falle ni avise (confirmado con datos reales: 366 empleados con status='A'
+// pasaron el import sin error pero no aparecían en ningún query de "Activo").
+// Si el valor ya viene en formato canónico (ej. "Activo" tal cual, como lo
+// manda GFP) no matchea ningún código de una letra y se deja tal cual.
+const STATUS_CODE_MAP: Record<string, string> = {
+  A: 'Activo',
+  I: 'Inactivo',
+  B: 'Baja',
+}
+
+function normalizeStatus(raw: string): string {
+  const trimmed = raw.trim()
+  return STATUS_CODE_MAP[trimmed.toUpperCase()] || trimmed
+}
+
 function mapRowValues(values: Partial<Record<CanonicalField, unknown>>, rowNumber: number): ParsedEmployeeRow {
   const out: ParsedEmployeeRow = { row: rowNumber }
 
@@ -235,7 +255,7 @@ function mapRowValues(values: Partial<Record<CanonicalField, unknown>>, rowNumbe
   if (values.plant != null)         out.plant         = String(values.plant).trim()
   if (values.shift != null)         out.shift         = String(values.shift).trim()
   if (values.contract_type != null) out.contract_type = String(values.contract_type).trim()
-  if (values.status != null)        out.status        = String(values.status).trim()
+  if (values.status != null)        out.status        = normalizeStatus(String(values.status))
   if (values.employee_code != null) out.employee_code = String(values.employee_code).trim()
   if (values.bank_name != null)     out.bank_name     = String(values.bank_name).trim()
   if (values.bank_clabe != null)    out.bank_clabe    = String(values.bank_clabe).trim()
