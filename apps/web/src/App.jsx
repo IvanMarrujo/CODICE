@@ -38,33 +38,54 @@ import {
   fetchZktecoDevices, registerZktecoDevice, deleteZktecoDevice,
 } from "./api.js";
 
-// Credenciales de auto-login del cockpit admin (tenant único GFP). Vienen de
-// env vars (VITE_ADMIN_EMAIL/VITE_ADMIN_PASSWORD) en vez de hardcodeadas en
-// el código fuente — igual terminan en el bundle público (es un auto-login
-// client-side), pero así no quedan pegadas en el historial de git.
-const AUTH = {
-  slug: "gfp",
-  email: import.meta.env.VITE_ADMIN_EMAIL || "admin@gfp.mx",
-  password: import.meta.env.VITE_ADMIN_PASSWORD || "",
-};
-
 /* ============================================================
    CÓDICE · Control de personal con LFT en línea
-   Tenant único: Grupo Food Packing Co. (CDMX)
+   Multi-tenant: slug/email/password se capturan en la pantalla de
+   login (ver LoginScreen más abajo) y se resuelven vía POST
+   /api/auth/login — ya no hay auto-login ni tenant hardcodeado.
    Draggable real (mutación DOM + commit, snap a rejilla).
    AI chat conectado al endpoint Anthropic del artefacto.
    ============================================================ */
 
+// ORG son los datos de "marca" del tenant activo, usados en headers,
+// documentos generados (contratos, constancias) y el eyebrow del cockpit.
+// Se inicializa con placeholders neutros y se sobreescribe (mutación in-place,
+// no reasignación) justo después de un login exitoso con los datos reales del
+// tenant — ver doLogin(). deptos/plantas siguen siendo un catálogo fijo: el
+// modelo Tenant no guarda estructura organizacional propia todavía, así que
+// un tenant nuevo (ej. Vital Health) hereda este catálogo genérico hasta que
+// eso se modele explícitamente (fuera del alcance de este fix de auth).
+const INDUSTRY_LABEL = {
+  MANUFACTURA_ALIMENTOS:    "Empaque y procesamiento de alimentos",
+  DESPACHO_JURIDICO:        "Despacho jurídico",
+  LABORATORIO_CLINICO:      "Laboratorio clínico",
+  FABRICACION_SUPLEMENTOS:  "Fabricación de suplementos alimenticios",
+  MULTI_INDUSTRIA:          "Multi-industria",
+  RETAIL:                   "Retail",
+  LOGISTICA:                "Logística",
+  SERVICIOS:                "Servicios",
+  OTRO:                     "Otro",
+};
+
 const ORG = {
-  name: "Grupo Food Packing Co.",
-  short: "GFP",
-  kind: "Empaque y procesamiento de alimentos",
-  city: "Ciudad de México",
-  domain: "gfp.mx",
+  name: "—",
+  short: "—",
+  kind: "—",
+  city: "—",
+  domain: "",
   deptos: ["Producción", "Empaque", "Calidad e Inocuidad", "Almacén y Logística", "Mantenimiento", "Compras", "Administración", "Recursos Humanos", "Ventas", "Sistemas"],
   plantas: ["Planta Vallejo", "Planta Iztapalapa", "CEDIS Tláhuac", "Corporativo Polanco"],
   n: 150,
 };
+
+function applyTenantBranding(tenant) {
+  Object.assign(ORG, {
+    name:  tenant?.name || ORG.name,
+    short: (tenant?.slug || ORG.short).toUpperCase(),
+    city:  tenant?.city || ORG.city,
+    kind:  INDUSTRY_LABEL[tenant?.industry] || ORG.kind,
+  });
+}
 
 /* ---------- toast bus ---------- */
 let _toast = () => {};
@@ -4860,7 +4881,9 @@ const NAV = [
 export default function App() {
   const [view, setView] = useState("cockpit");
   const [staff, setStaff] = useState([]);
-  const [boot, setBoot] = useState({ status: "loading", error: null });
+  const [boot, setBoot] = useState({ status: "login", error: null });
+  const [loginForm, setLoginForm] = useState({ slug: "", email: "", password: "" });
+  const [loginError, setLoginError] = useState(null);
   const [solicitudes, setSolicitudes] = useState(SOLICITUDES_SEED);
   const [resueltas, setResueltas] = useState([]);
   const [toasts, setToasts] = useState([]);
@@ -4874,23 +4897,55 @@ export default function App() {
   const goToPlantillaStatus = useCallback((status) => { setPlantillaFilter(status); setView("plantilla"); }, []);
   useEffect(() => { _toast = (msg, kind = "ok") => { const id = Math.random(); setToasts((t) => [...t, { id, msg, kind }]); setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 2600); }; }, []);
 
-  const loadFromApi = useCallback(async () => {
+  // Login real contra /api/auth/login: slug/email/password vienen del form,
+  // no hay tenant/credenciales hardcodeadas. Si el login en sí falla (slug
+  // inexistente, credenciales inválidas), el error se muestra inline en el
+  // form de login. Si el login funciona pero falla la carga de empleados,
+  // eso se trata aparte (pantalla de error con reintento, ver retryStaff)
+  // porque ahí ya hay una sesión válida — no tiene sentido pedir credenciales
+  // otra vez.
+  const doLogin = useCallback(async (creds) => {
+    setLoginError(null);
     setBoot({ status: "loading", error: null });
+    let accessToken, tenant;
     try {
-      const { accessToken, tenant } = await login(AUTH);
+      ({ accessToken, tenant } = await login(creds));
+    } catch (e) {
+      setBoot({ status: "login", error: null });
+      setLoginError(e.message);
+      return;
+    }
+    applyTenantBranding(tenant);
+    setToken(accessToken);
+    setTenantId(tenant?.id ?? null);
+    try {
       const { data } = await fetchEmployees(accessToken);
       setStaff(data.map(mapEmployee));
-      setToken(accessToken);
-      setTenantId(tenant?.id ?? null);
       setBoot({ status: "ready", error: null });
     } catch (e) {
       setBoot({ status: "error", error: e.message });
     }
   }, []);
-  useEffect(() => { loadFromApi(); }, [loadFromApi]);
+
+  const handleLoginSubmit = (e) => {
+    e.preventDefault();
+    doLogin(loginForm);
+  };
+
+  const retryStaff = useCallback(async () => {
+    if (!token) { setBoot({ status: "login", error: null }); return; }
+    setBoot({ status: "loading", error: null });
+    try {
+      const { data } = await fetchEmployees(token);
+      setStaff(data.map(mapEmployee));
+      setBoot({ status: "ready", error: null });
+    } catch (e) {
+      setBoot({ status: "error", error: e.message });
+    }
+  }, [token]);
 
   // Refetch ligero de la plantilla tras crear/editar/dar de baja — a
-  // diferencia de loadFromApi() no vuelve a hacer login, solo relee employees.
+  // diferencia de doLogin() no vuelve a hacer login, solo relee employees.
   const refreshStaff = useCallback(async () => {
     if (!token) return;
     try {
@@ -4922,13 +4977,42 @@ export default function App() {
 
   const attendance = useAttendance(token, socket);
 
+  if (boot.status === "login") {
+    return (
+      <div className="codice"><style>{CSS}</style>
+        <div className="bgfield"><div className="blob b1" /><div className="blob b2" /><div className="blob b3" /><div className="gridov" /></div>
+        <div style={{ position: "relative", zIndex: 1, minHeight: "100vh", display: "grid", placeItems: "center" }}>
+          <form onSubmit={handleLoginSubmit} className="glass" style={{ padding: 28, width: 340 }}>
+            <Eyebrow>CÓDICE</Eyebrow>
+            <div style={{ fontSize: 15, fontWeight: 600, margin: "8px 0 18px" }}>Iniciar sesión</div>
+            <label className="fld">Empresa (slug)</label>
+            <input className="input" style={{ marginBottom: 12 }} value={loginForm.slug}
+              onChange={(e) => setLoginForm((f) => ({ ...f, slug: e.target.value.trim() }))}
+              placeholder="ej. vitalhealth" autoFocus required />
+            <label className="fld">Correo</label>
+            <input className="input" style={{ marginBottom: 12 }} type="email" value={loginForm.email}
+              onChange={(e) => setLoginForm((f) => ({ ...f, email: e.target.value }))}
+              placeholder="admin@empresa.mx" required />
+            <label className="fld">Contraseña</label>
+            <input className="input" style={{ marginBottom: 16 }} type="password" value={loginForm.password}
+              onChange={(e) => setLoginForm((f) => ({ ...f, password: e.target.value }))}
+              required />
+            {loginError && <div style={{ color: "var(--rose)", fontSize: 12.5, marginBottom: 12 }}>{loginError}</div>}
+            <button type="submit" className="btn btn-accent" style={{ width: "100%", justifyContent: "center" }}>
+              <Lock size={14} />Entrar
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
   if (boot.status === "loading") {
     return (
       <div className="codice"><style>{CSS}</style>
         <div className="bgfield"><div className="blob b1" /><div className="blob b2" /><div className="blob b3" /><div className="gridov" /></div>
         <div style={{ position: "relative", zIndex: 1, minHeight: "100vh", display: "grid", placeItems: "center" }}>
           <div className="glass" style={{ padding: 28, textAlign: "center" }}>
-            <Eyebrow>CÓDICE · GFP</Eyebrow>
+            <Eyebrow>CÓDICE</Eyebrow>
             <div style={{ marginTop: 10 }}>Iniciando sesión y cargando plantilla…</div>
           </div>
         </div>
@@ -4943,7 +5027,7 @@ export default function App() {
           <div className="glass" style={{ padding: 28, textAlign: "center", maxWidth: 420 }}>
             <Eyebrow>Error de conexión</Eyebrow>
             <div style={{ marginTop: 10, color: "var(--rose)" }}>{boot.error}</div>
-            <button className="btn btn-accent" style={{ marginTop: 16 }} onClick={loadFromApi}><RefreshCw size={14} />Reintentar</button>
+            <button className="btn btn-accent" style={{ marginTop: 16 }} onClick={retryStaff}><RefreshCw size={14} />Reintentar</button>
           </div>
         </div>
       </div>
