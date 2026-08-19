@@ -2400,7 +2400,8 @@ const MODO_A_SYSTEMS = [
 ];
 
 const CODICE_FIELDS = [
-  ["full_name", "Nombre completo"], ["rfc", "RFC"], ["curp", "CURP"], ["nss", "NSS (IMSS)"],
+  ["full_name", "Nombre completo"], ["first_name", "Nombre(s)"], ["last_name", "Apellido(s)"],
+  ["rfc", "RFC"], ["curp", "CURP"], ["nss", "NSS (IMSS)"],
   ["employee_code", "Clave de empleado"],
   ["daily_salary", "Salario diario"], ["monthly_salary", "Salario mensual"],
   ["salary_base_imss", "SBC (Base Cotización IMSS)"],

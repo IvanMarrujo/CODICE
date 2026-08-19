@@ -6,6 +6,8 @@
 
 export type CanonicalField =
   | 'full_name'
+  | 'first_name'
+  | 'last_name'
   | 'rfc'
   | 'curp'
   | 'nss'
@@ -45,6 +47,20 @@ const ALIASES: Record<CanonicalField, string[]> = {
   full_name: [
     'nombre', 'name', 'nombre completo',
     'NOMBRES', 'APELLIDOS', 'APE_PAT', 'APE_MAT', 'NOM_EMPLEADO', 'NOMBRE_TRABAJADOR',
+  ],
+  // Columnas YA separadas (first_name/last_name reales de employees, no un
+  // "Nombre completo" a partir. 'nombre'/'NOMBRES'/'APELLIDOS' a secas se
+  // quedan como alias de full_name arriba — a propósito, para no romper el
+  // flujo de tenants existentes (GFP, etc.) que traen el nombre completo en
+  // una sola columna con ese título. Ver mapRowValues en excelParser.ts:
+  // si first_name Y last_name llegan mapeados, se usan directo (sin pasar
+  // por splitFullName) y tienen prioridad sobre un full_name que también
+  // venga mapeado en el mismo archivo.
+  first_name: [
+    'first_name', 'first name', 'firstname', 'nombre de pila', 'given name',
+  ],
+  last_name: [
+    'last_name', 'last name', 'lastname', 'apellido', 'apellido paterno', 'apellido materno', 'surname',
   ],
   rfc: [
     'rfc',
@@ -226,6 +242,8 @@ function normalize(header: string): string {
 // Etiquetas en español para el field mapper del wizard de conectores (Step 3).
 export const CANONICAL_FIELD_LABELS: Record<CanonicalField, string> = {
   full_name:     'Nombre completo',
+  first_name:    'Nombre(s)',
+  last_name:     'Apellido(s)',
   rfc:           'RFC',
   curp:          'CURP',
   nss:           'NSS (IMSS)',
@@ -365,10 +383,36 @@ function levenshtein(a: string, b: string): number {
   return dp[a.length][b.length]
 }
 
+function tokenize(s: string): string[] {
+  return s.split(' ').filter(Boolean)
+}
+
+// Similitud char-a-char sola se deja engañar por una palabra genérica
+// compartida entre frases de 2+ palabras — ej. "last name" vs "bank name"
+// daba 0.67 de similitud (comparten " name", que es más de la mitad de la
+// cadena) aunque "last" y "bank" no tengan relación. Confirmado con datos
+// reales: sugería mapear una columna de apellido a "Banco" con 67% de
+// confianza. Para frases multi-palabra en ambos lados, el score real es el
+// mínimo entre similitud de texto completo y solapamiento de tokens
+// (Jaccard) — así una sola palabra en común entre frases largas ya no
+// domina. Comparaciones de una sola palabra (la mayoría de los headers
+// reales) no se tocan, siguen igual que antes.
 function textSimilarity(a: string, b: string): number {
   const maxLen = Math.max(a.length, b.length)
-  if (maxLen === 0) return 1
-  return 1 - levenshtein(a, b) / maxLen
+  const charSim = maxLen === 0 ? 1 : 1 - levenshtein(a, b) / maxLen
+
+  const tokensA = tokenize(a)
+  const tokensB = tokenize(b)
+  if (tokensA.length > 1 && tokensB.length > 1) {
+    const setA = new Set(tokensA)
+    const setB = new Set(tokensB)
+    const intersection = [...setA].filter((t) => setB.has(t)).length
+    const union = new Set([...setA, ...setB]).size
+    const tokenSim = union === 0 ? 1 : intersection / union
+    return Math.min(charSim, tokenSim)
+  }
+
+  return charSim
 }
 
 export interface FieldSuggestion {
