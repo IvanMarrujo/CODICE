@@ -11,6 +11,7 @@ import bcrypt                                        from 'bcryptjs'
 import * as crypto                                    from 'crypto'
 import { z }                                           from 'zod'
 import { prismaPublic }                                from '../lib/prisma'
+import { getTenantPrisma }                             from '../middleware/tenant'
 import { redis }                                       from '../lib/redis'
 import { AppError }                                    from '../lib/errors'
 import type { JWTPayload }                             from '../middleware/auth'
@@ -25,6 +26,12 @@ const loginSchema = z.object({
   slug:     z.string().min(1),
   email:    z.string().email(),
   password: z.string().min(1),
+})
+
+const employeeLoginSchema = z.object({
+  slug:       z.string().min(1),
+  identifier: z.string().min(1), // CURP o NSS
+  password:   z.string().min(1),
 })
 
 const refreshSchema = z.object({
@@ -73,6 +80,20 @@ function publicTenant(tenant: { id: string; slug: string; name: string; plan: st
   return { id: tenant.id, slug: tenant.slug, name: tenant.name, plan: tenant.plan, status: tenant.status, city: tenant.city, industry: tenant.industry }
 }
 
+// Proyección segura del colaborador para la respuesta de employee-login —
+// nunca password_hash, ni RFC/CURP/NSS/banco (EmpleadoShell no los necesita
+// y ya los tecleó el propio colaborador para entrar).
+function publicEmployee(e: Record<string, any>) {
+  return {
+    id: e.id, employee_code: e.employee_code,
+    first_name: e.first_name, last_name: e.last_name, full_name: e.full_name,
+    department: e.department, position: e.position, plant: e.plant, shift: e.shift,
+    contract_type: e.contract_type, hire_date: e.hire_date, monthly_salary: e.monthly_salary,
+    xp_points: e.xp_points, xp_level: e.xp_level, streak_days: e.streak_days,
+    avatar_url: e.avatar_url,
+  }
+}
+
 // Ventana anti fuerza bruta: 10 intentos / 15 min por IP+slug+email.
 // No distingue "usuario no existe" de "password incorrecto" en la respuesta
 // para evitar enumeración de cuentas.
@@ -83,27 +104,16 @@ async function checkLoginRateLimit(key: string) {
 }
 
 // ── POST /api/auth/login ─────────────────────────────────────
-
-// Puente demo del colaborador (ver EmpleadoShell.jsx): cualquier login de
-// empleado con password "1234" reintenta aquí mismo con esta cuenta fija.
-// Su password ya viaja hardcoded en el bundle del front (público por
-// diseño), así que el rate limit por IP no protege un secreto — solo
-// bloqueaba de más: varios colaboradores en la misma IP agotaban el cupo
-// compartido y se veían bloqueados entre sí con un error de "credenciales
-// incorrectas" que no tenía nada que ver con su intento.
-const DEMO_BRIDGE_SLUG  = 'gfp'
-const DEMO_BRIDGE_EMAIL = 'admin@gfp.mx'
+// Login de AdminUsers (panel de RH). Los colaboradores usan
+// POST /api/auth/employee-login (más abajo), no esta ruta.
 
 router.post('/login', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { slug, email, password } = loginSchema.parse(req.body)
     const normalizedEmail = email.trim().toLowerCase()
 
-    const isDemoBridge = slug === DEMO_BRIDGE_SLUG && normalizedEmail === DEMO_BRIDGE_EMAIL
     const rlKey = `login:rl:${req.ip}:${slug}:${normalizedEmail}`
-    if (!isDemoBridge) {
-      await checkLoginRateLimit(rlKey)
-    }
+    await checkLoginRateLimit(rlKey)
 
     const tenant = await prismaPublic.tenant.findUnique({ where: { slug } })
     if (!tenant || tenant.status !== 'ACTIVE') {
@@ -130,6 +140,66 @@ router.post('/login', async (req: Request, res: Response, next: NextFunction) =>
       refreshToken,
       user:   publicUser(user),
       tenant: publicTenant(tenant),
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── POST /api/auth/employee-login ────────────────────────────
+// Login real del colaborador (ver EmpleadoShell.jsx). identifier = CURP o
+// NSS, resuelto contra employees del schema del tenant (no AdminUsers). El
+// JWT sale con role EMPLOYEE y sub = employee.id — el resto del backend
+// (requests.ts, notifications.ts, attendance.ts, payroll.ts, etc.) ya
+// espera esa forma para auto-acotar cada request al propio colaborador.
+
+router.post('/employee-login', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { slug, identifier, password } = employeeLoginSchema.parse(req.body)
+    const identifierNorm = identifier.trim().toUpperCase()
+
+    const rlKey = `emplogin:rl:${req.ip}:${slug}:${identifierNorm}`
+    await checkLoginRateLimit(rlKey)
+
+    const tenant = await prismaPublic.tenant.findUnique({ where: { slug } })
+    if (!tenant || tenant.status !== 'ACTIVE') {
+      throw new AppError(401, 'Credenciales inválidas')
+    }
+
+    const tenantDb = await getTenantPrisma(tenant.dbSchema)
+    // Re-afirmar search_path: mismo motivo que tenantMiddleware (pool puede
+    // reciclar la conexión física a una que no corrió el SET original).
+    await tenantDb.$executeRawUnsafe(`SET search_path = "${tenant.dbSchema}", public`)
+
+    const rows = await tenantDb.$queryRaw<any[]>`
+      SELECT * FROM employees
+      WHERE tenant_id = ${tenant.id}
+        AND (curp = ${identifierNorm} OR nss = ${identifierNorm})
+        AND status <> 'Baja'
+      LIMIT 1
+    `
+    const employee = rows[0]
+    // password_hash NULL = colaborador sin credencial provisionada todavía
+    // (ej. tenants viejos como gfp, antes de este batch) — mismo 401
+    // genérico que cualquier otro caso, no distinguir el motivo.
+    if (!employee || !employee.password_hash) throw new AppError(401, 'Credenciales inválidas')
+
+    const validPassword = await bcrypt.compare(password, employee.password_hash)
+    if (!validPassword) throw new AppError(401, 'Credenciales inválidas')
+
+    await redis.del(rlKey)
+
+    const { accessToken, refreshToken } = await issueTokenPair(
+      { id: employee.id, role: 'EMPLOYEE', email: employee.email || '' },
+      tenant.id,
+    )
+
+    res.json({
+      accessToken,
+      refreshToken,
+      employee: publicEmployee(employee),
+      tenant: publicTenant(tenant),
+      mustChangePassword: !!employee.must_change_password,
     })
   } catch (err) {
     next(err)

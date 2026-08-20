@@ -51,6 +51,12 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.employees (
   status            TEXT        DEFAULT 'Activo',
   -- Activo | Vacaciones | Incapacidad | Permiso | Periodo de prueba | Baja pendiente | Baja
 
+  -- Auth colaborador (ver POST /api/auth/employee-login) — password inicial
+  -- = CURP (o NSS si no hay CURP), forzando cambio en el primer login
+  -- mediante must_change_password.
+  password_hash         TEXT,
+  must_change_password  BOOLEAN     DEFAULT false,
+
   -- Origen del dato
   source            TEXT        DEFAULT 'MANUAL',
   -- CONTPAQ_XML | NOMIPAQ_DBF | NOMIPAQ_EXCEL | EXCEL_GENERIC | MANUAL
@@ -79,6 +85,9 @@ CREATE INDEX idx_emp_tenant   ON {SCHEMA}.employees (tenant_id);
 CREATE INDEX idx_emp_status   ON {SCHEMA}.employees (status);
 CREATE INDEX idx_emp_dept     ON {SCHEMA}.employees (department);
 CREATE INDEX idx_emp_fullname ON {SCHEMA}.employees USING gin (full_name gin_trgm_ops);
+CREATE INDEX idx_emp_curp     ON {SCHEMA}.employees (curp);
+CREATE INDEX idx_emp_nss      ON {SCHEMA}.employees (nss);
+-- ^ lookup de POST /api/auth/employee-login (identifier = curp o nss)
 -- ^ permite búsqueda fuzzy: WHERE full_name % 'garcia' (unaccent en fase 2)
 
 -- ─── CONTRACTS ───────────────────────────────────────────────
