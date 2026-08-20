@@ -1,8 +1,10 @@
 // ============================================================
 // CÓDICE · Auth routes
-// Login / refresh de AdminUsers (panel de RH). Montadas en
-// index.ts ANTES del pipeline authMiddleware/tenantMiddleware
-// (son las rutas que emiten el JWT, no lo requieren).
+// Login / refresh de AdminUsers (panel de RH) + login/cambio de password
+// de colaboradores. Montadas en index.ts ANTES del pipeline
+// authMiddleware/tenantMiddleware (la mayoría son las rutas que emiten el
+// JWT, no lo requieren) — employee-change-password sí lo requiere y aplica
+// authMiddleware manualmente por eso, ver su comentario abajo.
 // ============================================================
 
 import { Router, Request, Response, NextFunction } from 'express'
@@ -14,6 +16,7 @@ import { prismaPublic }                                from '../lib/prisma'
 import { getTenantPrisma }                             from '../middleware/tenant'
 import { redis }                                       from '../lib/redis'
 import { AppError }                                    from '../lib/errors'
+import { authMiddleware }                              from '../middleware/auth'
 import type { JWTPayload }                             from '../middleware/auth'
 
 const router = Router()
@@ -36,6 +39,10 @@ const employeeLoginSchema = z.object({
 
 const refreshSchema = z.object({
   refreshToken: z.string().min(1),
+})
+
+const employeeChangePasswordSchema = z.object({
+  newPassword: z.string().min(8, 'La contraseña debe tener al menos 8 caracteres'),
 })
 
 // ── Helpers de tokens ────────────────────────────────────────
@@ -201,6 +208,61 @@ router.post('/employee-login', async (req: Request, res: Response, next: NextFun
       tenant: publicTenant(tenant),
       mustChangePassword: !!employee.must_change_password,
     })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── POST /api/auth/employee-change-password ──────────────────
+// Cambio obligatorio de password en el primer login (ver EmpleadoShell.jsx
+// — pantalla ChangePasswordScreen). Montada bajo /api/auth (pre-pipeline,
+// ver cabecera del archivo), así que aplica authMiddleware manualmente
+// aquí en vez de heredarlo — no hay tenantMiddleware corrido, se resuelve
+// el tenant a mano igual que employee-login.
+//
+// must_change_password se valida contra el estado ACTUAL en DB, nunca
+// contra un claim del JWT: el access token del login inicial sigue siendo
+// válido (no expira) después de un cambio exitoso, así que si confiáramos
+// en un claim viejo, ese mismo token podría reusarse para resetear el
+// password de nuevo sin volver a autenticarse. Al releer must_change_password
+// de la fila actual, la segunda llamada con el mismo token ya la ve en
+// false y la rechaza.
+
+router.post('/employee-change-password', authMiddleware, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (req.jwt.role !== 'EMPLOYEE') throw new AppError(403, 'No autorizado')
+
+    const { newPassword } = employeeChangePasswordSchema.parse(req.body)
+
+    const tenant = await prismaPublic.tenant.findUnique({ where: { id: req.jwt.tid } })
+    if (!tenant || tenant.status !== 'ACTIVE') throw new AppError(401, 'Tenant no disponible')
+
+    const tenantDb = await getTenantPrisma(tenant.dbSchema)
+    await tenantDb.$executeRawUnsafe(`SET search_path = "${tenant.dbSchema}", public`)
+
+    const rows = await tenantDb.$queryRaw<any[]>`
+      SELECT * FROM employees WHERE id = ${req.jwt.sub} AND tenant_id = ${tenant.id} LIMIT 1
+    `
+    const employee = rows[0]
+    if (!employee) throw new AppError(404, 'Colaborador no encontrado')
+
+    if (!employee.must_change_password) {
+      throw new AppError(403, 'No tienes un cambio de contraseña pendiente. Inicia sesión de nuevo si necesitas cambiarla.')
+    }
+
+    const normNew = newPassword.trim()
+    const curp = (employee.curp || '').trim().toUpperCase()
+    const nss  = (employee.nss || '').trim()
+    if (curp && normNew.toUpperCase() === curp) throw new AppError(400, 'La nueva contraseña no puede ser igual a tu CURP')
+    if (nss && normNew === nss)                 throw new AppError(400, 'La nueva contraseña no puede ser igual a tu NSS')
+
+    const hash = await bcrypt.hash(normNew, 10)
+    await tenantDb.$executeRaw`
+      UPDATE employees SET password_hash = ${hash}, must_change_password = false, updated_at = NOW()
+      WHERE id = ${employee.id}
+    `
+
+    res.json({ ok: true })
   } catch (err) {
     next(err)
   }
