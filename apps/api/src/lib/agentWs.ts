@@ -19,28 +19,31 @@ import { getTenantPrisma } from '../middleware/tenant'
 import { applyDelta, AgentDelta } from './agentDelta'
 import { autoSyncQueue } from '../jobs/autoSyncQueue'
 import { upsertConnectedSource } from '../routes/connectors'
-import { WEBHOOK_SECRET, TIMESTAMP_TOLERANCE_MS } from '../routes/webhook'
+import { TIMESTAMP_TOLERANCE_MS } from '../routes/webhook'
 
 const MAX_DELTAS_PER_MESSAGE = 200
 const MAX_FULL_SYNC_BYTES    = 20 * 1024 * 1024
 const FULL_SYNC_EXT_BY_SOURCE_TYPE: Record<string, string> = { EXCEL: 'xlsx', CFDI: 'xml' }
 
-function verifySignature(tenantId: unknown, timestamp: unknown, signature: unknown): tenantId is string {
+// Firma contra el webhookSecret PROPIO del tenant (misma columna que usa
+// routes/webhook.ts) — nunca un secreto global, para que el secreto de un
+// tenant no autentique mensajes a nombre de otro.
+function verifySignature(secret: string, tenantId: unknown, timestamp: unknown, signature: unknown): tenantId is string {
   if (typeof tenantId !== 'string' || typeof signature !== 'string' || typeof timestamp !== 'number') return false
   if (!Number.isFinite(timestamp) || Math.abs(Date.now() - timestamp) > TIMESTAMP_TOLERANCE_MS) return false
-  const expected = crypto.createHmac('sha256', WEBHOOK_SECRET).update(`${tenantId}:${timestamp}`).digest('hex')
+  const expected = crypto.createHmac('sha256', secret).update(`${tenantId}:${timestamp}`).digest('hex')
   const sigBuf = Buffer.from(signature)
   const expBuf = Buffer.from(expected)
   return sigBuf.length === expBuf.length && crypto.timingSafeEqual(sigBuf, expBuf)
 }
 
-async function resolveActiveTenant(tenantId: string): Promise<{ dbSchema: string } | null> {
+async function resolveActiveTenant(tenantId: string): Promise<{ dbSchema: string; webhookSecret: string } | null> {
   const tenant = await prismaPublic.tenant.findUnique({
     where:  { id: tenantId },
-    select: { dbSchema: true, status: true },
+    select: { dbSchema: true, status: true, webhookSecret: true },
   })
-  if (!tenant || tenant.status !== 'ACTIVE') return null
-  return { dbSchema: tenant.dbSchema }
+  if (!tenant || tenant.status !== 'ACTIVE' || !tenant.webhookSecret) return null
+  return { dbSchema: tenant.dbSchema, webhookSecret: tenant.webhookSecret }
 }
 
 function safeSend(ws: WebSocket, payload: unknown): void {
@@ -69,14 +72,18 @@ export function attachAgentWebSocket(server: HttpServer, io: SocketIOServer): vo
 
       if (msg?.type === 'auth') {
         const { tenantId: tid, signature, timestamp } = msg
-        if (!verifySignature(tid, timestamp, signature)) {
+        if (typeof tid !== 'string') {
           safeSend(ws, { type: 'auth_error', message: 'Invalid signature' })
           ws.close()
           return
         }
+        // Resolver el tenant (y su secreto) ANTES de verificar la firma —
+        // así siempre se valida contra el secreto correcto, nunca uno
+        // global. Mismo mensaje de error para "tenant no existe" e
+        // "firma inválida" para no filtrar qué tenantIds son válidos.
         const tenant = await resolveActiveTenant(tid)
-        if (!tenant) {
-          safeSend(ws, { type: 'auth_error', message: 'Tenant no encontrado o inactivo' })
+        if (!tenant || !verifySignature(tenant.webhookSecret, tid, timestamp, signature)) {
+          safeSend(ws, { type: 'auth_error', message: 'Invalid signature' })
           ws.close()
           return
         }

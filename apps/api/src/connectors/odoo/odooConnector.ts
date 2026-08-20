@@ -4,12 +4,12 @@
 // Zoho/Monday: credenciales por tenant en Redis, nunca en Postgres. A
 // diferencia de esos dos, Odoo usa usuario+contraseña (no OAuth2/token
 // estático) — la contraseña se cifra con AES-256-GCM antes de guardarse
-// (ver ENCRYPTION_KEY, derivada de WEBHOOK_SECRET) en vez de guardarse en claro.
+// (ver ENCRYPTION_KEY, derivada de APP_SECRET) en vez de guardarse en claro.
 // ============================================================
 
 import * as crypto from 'crypto'
 import { redis } from '../../lib/redis'
-import { WEBHOOK_SECRET } from '../../routes/webhook'
+import { APP_SECRET } from '../../lib/appSecret'
 import { EmployeeUpsertRow } from '../common'
 import { splitFullName } from '../excel/excelParser'
 
@@ -21,13 +21,13 @@ export interface OdooCredentials {
   uid:      number
 }
 
-// ── Password en reposo: AES-256-GCM con clave derivada de WEBHOOK_SECRET ──
-// (mismo secreto que ya firma el HMAC del agente/webhook, ver routes/webhook.ts
-// — no se introduce un secreto nuevo que gestionar). sha256(WEBHOOK_SECRET)
-// da los 32 bytes exactos que pide AES-256; el IV va concatenado al inicio
-// del texto cifrado (formato estándar iv:tag:ciphertext, todo en hex).
+// ── Password en reposo: AES-256-GCM con clave derivada de APP_SECRET ──
+// (secreto de app, NO el webhookSecret por-tenant del sync-agent — ver
+// lib/appSecret.ts). sha256(APP_SECRET) da los 32 bytes exactos que pide
+// AES-256; el IV va concatenado al inicio del texto cifrado (formato
+// estándar iv:tag:ciphertext, todo en hex).
 
-const ENCRYPTION_KEY = crypto.createHash('sha256').update(WEBHOOK_SECRET).digest()
+const ENCRYPTION_KEY = crypto.createHash('sha256').update(APP_SECRET).digest()
 
 export function encryptPassword(plain: string): string {
   const iv = crypto.randomBytes(12)

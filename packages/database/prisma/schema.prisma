@@ -68,9 +68,10 @@ model Tenant {
   status     TenantStatus @default(PROVISIONING)
 
   // Multi-tenant isolation
-  dbSchema   String       @unique   // "tenant_abc123" — PostgreSQL schema
-  redisNs    String       @unique   // "t:abc123" — Redis namespace prefix
-  r2Bucket   String?                // "codice-abc123" — Cloudflare R2 bucket
+  dbSchema      String    @unique   // "tenant_abc123" — PostgreSQL schema
+  redisNs       String    @unique   // "t:abc123" — Redis namespace prefix
+  r2Bucket      String?              // "codice-abc123" — Cloudflare R2 bucket
+  webhookSecret String?   @unique   // HMAC secret for sync-agent webhook/WS auth, per tenant — never shared, never committed to git
 
   // Contact / config
   contactEmail    String

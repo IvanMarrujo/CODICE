@@ -77,10 +77,11 @@ async function main() {
   }
 
   // ── 2. Generar IDs únicos ────────────────────────────────
-  const tenantId  = cuid()
-  const dbSchema  = `tenant_${tenantId}`
-  const redisNs   = `t:${tenantId}`
-  const r2Bucket  = `codice-${tenantId}`
+  const tenantId      = cuid()
+  const dbSchema      = `tenant_${tenantId}`
+  const redisNs       = `t:${tenantId}`
+  const r2Bucket      = `codice-${tenantId}`
+  const webhookSecret = crypto.randomBytes(32).toString('hex')
 
   // ── 3. Crear registro en schema público ─────────────────
   log('⚙️ ', 'Creando registro en schema público...')
@@ -95,6 +96,7 @@ async function main() {
       dbSchema:     dbSchema,
       redisNs:      redisNs,
       r2Bucket:     r2Bucket,
+      webhookSecret,
       status:       'PROVISIONING',
       maxEmployees: PLAN === 'CONECTOR' ? 100 : PLAN === 'CORE' ? 300 : 999,
       maxAdminUsers: PLAN === 'ENTERPRISE' ? 20 : 5,
