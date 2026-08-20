@@ -770,3 +770,85 @@ export function factorialSync(token) {
 export function factorialDisconnect(token) {
   return authedFetchJSON(token, `/api/connectors/factorial/disconnect`, "DELETE");
 }
+
+// ============================================================
+// Vital Health Sprint — Features 4 (machotes), 5 (LFT/separación), 6 (reportes)
+// ============================================================
+
+// Upload multipart genérico (con progreso opcional) reutilizado por machotes,
+// cartas de salida y reglamento interno.
+function authedUpload(token, path, file, { method = "POST", fields } = {}) {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (fields) Object.entries(fields).forEach(([k, v]) => form.append(k, v));
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, `${API_BASE}${path}`);
+    xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch { /* respuesta no-JSON */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body.error || `Error al subir archivo (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error("Error de red al subir archivo"));
+    xhr.send(form);
+  });
+}
+
+// ── Feature 4 · Biblioteca de machotes de contrato ──
+export function uploadContractTemplate(token, file) {
+  return authedUpload(token, `/api/contracts/templates/upload`, file);
+}
+export function fetchContractTemplates(token) {
+  return authedFetch(token, `/api/contracts/templates`);
+}
+export function updateContractTemplate(token, id, patch) {
+  return authedFetchJSON(token, `/api/contracts/templates/${id}`, "PATCH", patch);
+}
+export function deleteContractTemplate(token, id) {
+  return authedFetchJSON(token, `/api/contracts/templates/${id}`, "DELETE");
+}
+export function generateContractFromTemplate(token, id, payload) {
+  return authedFetchJSON(token, `/api/contracts/templates/${id}/generate`, "POST", payload);
+}
+
+// ── Feature 5 · Reglamento, cartas de salida, separación ──
+export function uploadReglamento(token, file) {
+  return authedUpload(token, `/api/lft/reglamento`, file);
+}
+export function fetchReglamento(token) {
+  return authedFetch(token, `/api/lft/reglamento`);
+}
+export function uploadExitLetterTemplate(token, file) {
+  return authedUpload(token, `/api/lft/exit-letters/upload`, file);
+}
+export function fetchExitLetterTemplates(token) {
+  return authedFetch(token, `/api/lft/exit-letters`);
+}
+export function updateExitLetterTemplate(token, id, patch) {
+  return authedFetchJSON(token, `/api/lft/exit-letters/${id}`, "PATCH", patch);
+}
+export function deleteExitLetterTemplate(token, id) {
+  return authedFetchJSON(token, `/api/lft/exit-letters/${id}`, "DELETE");
+}
+export function calcSeparacion(token, payload) {
+  return authedFetchJSON(token, `/api/lft/separation/calcular`, "POST", payload);
+}
+export function createSeparacion(token, payload) {
+  return authedFetchJSON(token, `/api/lft/separation`, "POST", payload);
+}
+
+// ── Feature 6 · Reportes al instante ──
+export function generateReport(token, payload) {
+  return authedFetchJSON(token, `/api/reports/generate`, "POST", payload);
+}
+export function fetchReportTemplates(token) {
+  return authedFetch(token, `/api/reports/templates`);
+}
+export function saveReportTemplate(token, payload) {
+  return authedFetchJSON(token, `/api/reports/templates`, "POST", payload);
+}
+export function deleteReportTemplate(token, id) {
+  return authedFetchJSON(token, `/api/reports/templates/${id}`, "DELETE");
+}

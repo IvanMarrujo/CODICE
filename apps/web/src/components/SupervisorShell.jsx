@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 
 /* ============================================================
-   CÓDICE · Supervisor Shell — jefes de área / línea de producción
+   KODICE · Supervisor Shell — jefes de área / línea de producción
    Distinto del shell colaborador (datos personales) y del panel admin
    (RH completo): un supervisor solo ve y actúa sobre SU equipo — nunca
    salario/RFC/CURP/bancarios (ver GET /api/supervisor/team/:id/profile).
@@ -214,7 +214,7 @@ function LoginScreen({ onSuccess }) {
   return (
     <div className="sup-login">
       <div>
-        <div className="sup-login-logo">✦ CÓDICE</div>
+        <div className="sup-login-logo">✦ KODICE</div>
         <div className="sup-login-sub">Panel de Supervisor</div>
       </div>
       <form className="sup-login-form" onSubmit={submit}>
@@ -812,7 +812,7 @@ export default function SupervisorShell() {
       <SupToastHost />
       <div className="sup-app">
         <div className="sup-topbar">
-          <span className="sup-topbar-brand">✦ CÓDICE</span>
+          <span className="sup-topbar-brand">✦ KODICE</span>
           <span className="sup-topbar-role">SUPERVISOR</span>
         </div>
 

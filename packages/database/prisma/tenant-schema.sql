@@ -721,6 +721,105 @@ CREATE TABLE IF NOT EXISTS {SCHEMA}.radar_digests (
 
 CREATE INDEX idx_radar_digests_tenant ON {SCHEMA}.radar_digests (tenant_id, generated_at DESC);
 
+-- ─── CONTRACT TEMPLATES (Feature 4 · Biblioteca de machotes) ───
+-- Machotes de contrato subidos por RH, analizados por IA (Claude) para
+-- extraer tipo, cláusulas y campos variables. Reutilizables para generar
+-- contratos concretos por colaborador.
+
+CREATE TABLE IF NOT EXISTS {SCHEMA}.contract_templates (
+  id                TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  tenant_id         TEXT        NOT NULL,
+  nombre            TEXT        NOT NULL,
+  tipo              TEXT,       -- Indefinido | Determinado | Prueba | Capacitación | Obra
+  puesto_aplica     JSONB       DEFAULT '[]',   -- ["Operador nocturno", ...]
+  clausulas         JSONB       DEFAULT '[]',   -- cláusulasPrincipales de la IA
+  campos_variables  JSONB       DEFAULT '[]',   -- ["{NOMBRE}", "{SALARIO}", ...]
+  disposiciones     TEXT,                        -- lógica en lenguaje natural
+  archivo_url       TEXT,                        -- key en R2/tmp del archivo original
+  ia_analysis       JSONB,                       -- respuesta cruda del análisis IA
+  created_by        TEXT,
+  created_at        TIMESTAMPTZ DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_contract_templates_tenant ON {SCHEMA}.contract_templates (tenant_id, created_at DESC);
+
+-- ─── EXIT LETTER TEMPLATES (Feature 5 · Machotes de carta de salida) ──
+
+CREATE TABLE IF NOT EXISTS {SCHEMA}.exit_letter_templates (
+  id                TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  tenant_id         TEXT        NOT NULL,
+  nombre            TEXT        NOT NULL,
+  tipo              TEXT,       -- renuncia | despido_justificado | despido_injustificado | mutuo_acuerdo
+  disposiciones     TEXT,
+  archivo_url       TEXT,
+  ia_analysis       JSONB,
+  created_by        TEXT,
+  created_at        TIMESTAMPTZ DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_exit_letter_templates_tenant ON {SCHEMA}.exit_letter_templates (tenant_id, created_at DESC);
+
+-- ─── SEPARATION PROCESSES (Feature 5 · Wizard "lanzar un misil") ──
+-- Un expediente por proceso de separación laboral iniciado desde el wizard.
+-- Guarda el tipo, respuestas previas, cálculo del finiquito y el estado de
+-- los documentos/firmas. Folio legible: GFP-2026-SEP-####.
+
+CREATE TABLE IF NOT EXISTS {SCHEMA}.separation_processes (
+  id                TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  tenant_id         TEXT        NOT NULL,
+  folio             TEXT,
+  employee_id       TEXT        REFERENCES {SCHEMA}.employees(id) ON DELETE SET NULL,
+  tipo              TEXT        NOT NULL,
+  -- renuncia | despido_justificado | despido_injustificado | mutuo_acuerdo | jubilacion
+  respuestas        JSONB       DEFAULT '{}',   -- preguntas previas (Step 3)
+  calculo           JSONB       DEFAULT '{}',   -- desglose del finiquito (Step 4)
+  documentos        JSONB       DEFAULT '[]',   -- checklist de documentos (Step 5)
+  firmas            JSONB       DEFAULT '[]',   -- estado de firmas (Step 6)
+  status            TEXT        DEFAULT 'Iniciado',
+  -- Iniciado | Documentos generados | Firmas pendientes | Completado | Cancelado
+  created_by        TEXT,
+  created_at        TIMESTAMPTZ DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_separation_processes_tenant ON {SCHEMA}.separation_processes (tenant_id, created_at DESC);
+
+-- ─── REPORT TEMPLATES (Feature 6 · Reportes al instante) ──────
+-- Preguntas guardadas ("Mis reportes guardados") reutilizables con datos
+-- frescos en cada corrida.
+
+CREATE TABLE IF NOT EXISTS {SCHEMA}.report_templates (
+  id                TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  tenant_id         TEXT        NOT NULL,
+  nombre            TEXT        NOT NULL,
+  pregunta          TEXT        NOT NULL,
+  filtros           JSONB       DEFAULT '{}',
+  created_by        TEXT,
+  created_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_report_templates_tenant ON {SCHEMA}.report_templates (tenant_id, created_at DESC);
+
+-- ─── TENANT DOCUMENTS (Feature 5 · Reglamento interno pineado) ──
+-- Documentos a nivel tenant (no por empleado) que se reflejan en el shell
+-- del colaborador. type='reglamento_interno' alimenta la sección Avisos.
+
+CREATE TABLE IF NOT EXISTS {SCHEMA}.tenant_documents (
+  id                TEXT        PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  tenant_id         TEXT        NOT NULL,
+  type              TEXT        NOT NULL,   -- reglamento_interno | ...
+  nombre            TEXT,
+  archivo_url       TEXT,                    -- key en R2/tmp
+  mime_type         TEXT,
+  uploaded_by       TEXT,
+  created_at        TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT uq_tenant_document_type UNIQUE (tenant_id, type)
+);
+
+CREATE INDEX idx_tenant_documents_tenant ON {SCHEMA}.tenant_documents (tenant_id, type);
+
 -- ─── UPDATED_AT trigger (aplica a todas las tablas con ese campo)
 
 CREATE OR REPLACE FUNCTION {SCHEMA}.set_updated_at()
@@ -739,7 +838,8 @@ BEGIN
     'employees','contracts','payroll_records','time_off',
     'requests','attendance_records','actas','courses','course_progress',
     'bonuses','signage_slides','connected_sources','health_profiles','vacation_policy',
-    'department_risk_profiles'
+    'department_risk_profiles','contract_templates','exit_letter_templates',
+    'separation_processes'
   ]
   LOOP
     EXECUTE format(
