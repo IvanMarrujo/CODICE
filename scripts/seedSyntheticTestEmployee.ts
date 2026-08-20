@@ -86,7 +86,20 @@ async function cleanup(pg: PgClient, schema: string, slug: string) {
   for (const row of existing.rows) {
     console.log(`🧹 Limpiando empleado sintético ${row.id} en "${slug}"...`)
     for (const table of RELATED_TABLES) {
-      const r = await pg.query(`DELETE FROM "${schema}".${table} WHERE employee_id = $1`, [row.id])
+      // No todos los tenants tienen todas las tablas al día (mismo problema
+      // de "migración nunca corrida contra tenants ya provisionados" que
+      // este script terminó destapando) — una tabla faltante no debe
+      // abortar la limpieza del resto, solo se salta con una nota.
+      let r
+      try {
+        r = await pg.query(`DELETE FROM "${schema}".${table} WHERE employee_id = $1`, [row.id])
+      } catch (err: any) {
+        if (err.code === '42P01') {
+          console.log(`   ${table}: ⚠️  tabla no existe en este tenant, se omite`)
+          continue
+        }
+        throw err
+      }
       if (r.rowCount) console.log(`   ${table}: ${r.rowCount} fila(s) borrada(s)`)
     }
     await pg.query(`DELETE FROM "${schema}".employees WHERE id = $1`, [row.id])
