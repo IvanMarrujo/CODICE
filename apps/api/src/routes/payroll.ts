@@ -17,7 +17,7 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5'
 
 const listQuerySchema = z.object({
-  employeeId: z.string().min(1),
+  employeeId: z.string().min(1).optional(), // opcional: un colaborador (role EMPLOYEE) lo infiere de su JWT
 }).merge(paginationQuerySchema)
 
 // ── GET /api/payroll/summary?period=2026-07-01 ───────────────
@@ -180,7 +180,10 @@ router.get('/:id/explain', requireEmployee, async (req: Request, res: Response, 
   }
 })
 
-router.get('/', requireHR, async (req: Request, res: Response, next: NextFunction) => {
+// requireEmployee (no requireHR): "Mis Pagos" del shell colaborador lo
+// llama con su propio token EMPLOYEE — se auto-acota a jwt.sub igual que
+// requests.ts/attendance.ts, sin depender de un token admin puente.
+router.get('/', requireEmployee, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = listQuerySchema.parse(req.query)
     const { employeeId, page } = parsed
@@ -189,16 +192,19 @@ router.get('/', requireHR, async (req: Request, res: Response, next: NextFunctio
     const tenantDb = req.tenantDb
     const offset = (page - 1) * pageSize
 
+    const scopedEmployeeId = req.jwt.role === 'EMPLOYEE' ? req.jwt.sub : employeeId
+    if (!scopedEmployeeId) throw new AppError(400, 'employeeId es requerido')
+
     const [data, totalRows] = await Promise.all([
       tenantDb.$queryRaw<any[]>`
         SELECT * FROM payroll_records
-        WHERE tenant_id = ${tenantId} AND employee_id = ${employeeId}
+        WHERE tenant_id = ${tenantId} AND employee_id = ${scopedEmployeeId}
         ORDER BY payment_date DESC NULLS LAST, created_at DESC
         LIMIT ${pageSize} OFFSET ${offset}
       `,
       tenantDb.$queryRaw<{ count: number }[]>`
         SELECT COUNT(*)::int AS count FROM payroll_records
-        WHERE tenant_id = ${tenantId} AND employee_id = ${employeeId}
+        WHERE tenant_id = ${tenantId} AND employee_id = ${scopedEmployeeId}
       `,
     ])
 

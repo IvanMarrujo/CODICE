@@ -31,58 +31,35 @@ const empXpFlash = (payload) => _empXpFlash(payload);
 // dev de escritorio, la IP de red al abrir desde un teléfono) — "localhost"
 // fijo resolvería al propio teléfono, no a esta máquina.
 const API_BASE = import.meta.env.VITE_API_URL || `${window.location.protocol}//${window.location.hostname}:3001`;
-// Puente de login demo (ver loginFlow más abajo) — mismas env vars que App.jsx.
-const AUTH = {
-  slug: "gfp",
-  email: import.meta.env.VITE_ADMIN_EMAIL || "admin@gfp.mx",
-  password: import.meta.env.VITE_ADMIN_PASSWORD || "",
-};
-const DEMO_PASSWORD = "1234";
 
-async function apiAuthLogin(payload) {
-  const res = await fetch(`${API_BASE}/api/auth/login`, {
+// Última empresa (slug) usada — solo para prellenar el campo, nunca la
+// credencial. El colaborador reabre esta app en su propio teléfono muchas
+// veces; no tiene sentido pedirle el slug de su empresa cada vez.
+const LAST_SLUG_KEY = "codice_emp_last_slug";
+
+async function apiEmployeeLogin({ slug, identifier, password }) {
+  const res = await fetch(`${API_BASE}/api/auth/employee-login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ slug, identifier, password }),
   });
   const body = await res.json().catch(() => ({}));
-  console.log("[auth] POST /api/auth/login", { email: payload.email, status: res.status, ok: res.ok, body });
   if (!res.ok) {
     throw new Error(body.error || `Login falló (${res.status})`);
   }
   return body;
 }
 
-async function apiLogin() {
-  console.log("[auth] apiLogin() — usando credenciales admin hardcoded", AUTH.email);
-  return apiAuthLogin(AUTH);
-}
-
-// Login del colaborador: intenta el backend real con lo que haya tecleado
-// (identificador + password). El backend solo tiene AdminUsers por email,
-// así que un número de empleado/RFC normalmente rebota — si la contraseña
-// coincide con la clave demo, entramos con el token admin del tenant como
-// puente hasta que exista login real de empleados.
-async function loginFlow(identifier, password) {
-  console.log("[auth] loginFlow() start", { identifier, password });
+// Login real del colaborador contra POST /api/auth/employee-login
+// (identifier = CURP o NSS). Devuelve la sesión completa — token + el
+// registro del propio colaborador, ya resuelto por el backend — para que
+// loadEmployeeData no tenga que ir a buscarlo con una segunda llamada.
+async function loginFlow(slug, identifier, password) {
   try {
-    const real = await apiAuthLogin({ slug: AUTH.slug, email: identifier, password });
-    console.log("[auth] login real exitoso");
-    return real.accessToken;
-  } catch (realErr) {
-    console.log("[auth] login real falló:", realErr.message);
-    if (password === DEMO_PASSWORD) {
-      console.log("[auth] password coincide con DEMO_PASSWORD — intentando fallback demo");
-      try {
-        const demo = await apiLogin();
-        console.log("[auth] login demo exitoso");
-        return demo.accessToken;
-      } catch (demoErr) {
-        console.log("[auth] login demo también falló:", demoErr.message);
-      }
-    } else {
-      console.log("[auth] password NO coincide con DEMO_PASSWORD, no hay fallback");
-    }
+    const session = await apiEmployeeLogin({ slug, identifier, password });
+    try { localStorage.setItem(LAST_SLUG_KEY, slug); } catch { /* storage puede no estar disponible (modo privado) */ }
+    return session;
+  } catch (err) {
     throw new Error("Credenciales incorrectas. Contacta a tu área de RH.");
   }
 }
@@ -870,6 +847,7 @@ function ConfirmSheet({ confirm, busy, error, onConfirm, onCancel, extra }) {
 // ── LOGIN SCREEN ─────────────────────────────────────────────
 
 function LoginScreen({ onSuccess }) {
+  const [slug, setSlug] = useState(() => { try { return localStorage.getItem(LAST_SLUG_KEY) || ""; } catch { return ""; } });
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -878,12 +856,12 @@ function LoginScreen({ onSuccess }) {
 
   const submit = async (e) => {
     e.preventDefault();
-    if (!identifier || !password || loading) return;
+    if (!slug.trim() || !identifier || !password || loading) return;
     setLoading(true);
     setError(null);
     try {
-      const token = await loginFlow(identifier, password);
-      onSuccess(token);
+      const session = await loginFlow(slug.trim(), identifier, password);
+      onSuccess(session);
     } catch (err) {
       setError(err.message || "Credenciales incorrectas. Contacta a tu área de RH.");
       setErrorKey((k) => k + 1);
@@ -898,7 +876,12 @@ function LoginScreen({ onSuccess }) {
         <div className="emp-login-sub">Portal del Colaborador</div>
       </div>
       <form className="emp-login-form" onSubmit={submit}>
-        <label className="emp-label">Número de empleado o RFC</label>
+        <label className="emp-label">Empresa</label>
+        <input
+          className="emp-input" style={{ marginBottom: 14 }} autoComplete="organization" placeholder="ej. vitalhealth"
+          value={slug} onChange={(e) => setSlug(e.target.value)}
+        />
+        <label className="emp-label">CURP o NSS</label>
         <input
           className="emp-input" style={{ marginBottom: 14 }} autoComplete="username"
           value={identifier} onChange={(e) => setIdentifier(e.target.value)}
@@ -908,7 +891,7 @@ function LoginScreen({ onSuccess }) {
           className="emp-input" style={{ marginBottom: 24 }} type="password" autoComplete="current-password"
           value={password} onChange={(e) => setPassword(e.target.value)}
         />
-        <button type="submit" className="emp-btn-primary" style={{ opacity: loading ? 0.7 : undefined }} disabled={loading || !identifier || !password}>
+        <button type="submit" className="emp-btn-primary" style={{ opacity: loading ? 0.7 : undefined }} disabled={loading || !slug.trim() || !identifier || !password}>
           {loading ? <Loader2 size={20} style={{ animation: "empspin 1s linear infinite" }} /> : <LogIn size={20} />} Entrar
         </button>
         <AnimatePresence mode="wait">
@@ -2775,20 +2758,15 @@ export default function EmpleadoShell() {
     return () => { socket.disconnect(); socketRef.current = null; };
   }, [employee?.id]);
 
-  // Se dispara tras un login exitoso (real o demo) — carga el resto de la
-  // información del colaborador antes de mostrar el saludo.
-  const loadEmployeeData = useCallback(async (accessToken) => {
-    console.log("[auth] loadEmployeeData() start — token recibido:", !!accessToken);
+  // Se dispara tras un login exitoso — la sesión ya trae el registro del
+  // propio colaborador (POST /api/auth/employee-login lo resuelve del lado
+  // del backend), así que solo falta lo que depende del resto del stack:
+  // notificaciones y solicitudes pendientes.
+  const loadEmployeeData = useCallback(async (session) => {
+    const { accessToken, employee: full } = session;
     setStage("booting");
     setBootError(null);
     try {
-      const list = await apiFetch(accessToken, "/api/employees?pageSize=1");
-      console.log("[auth] /api/employees?pageSize=1 ->", list);
-      const first = list.data[0];
-      if (!first) throw new Error("No hay colaboradores en este tenant");
-      const full = await apiFetch(accessToken, `/api/employees/${first.id}`);
-      console.log("[auth] employees[0] cargado:", full.first_name, full.last_name, full.id);
-
       const notif = await apiFetch(accessToken, `/api/notifications?employeeId=${full.id}`);
       const reqs = await apiFetch(accessToken, `/api/requests?employeeId=${full.id}&pageSize=50`);
 
@@ -2798,9 +2776,7 @@ export default function EmpleadoShell() {
       setPendingReq((reqs.data || []).filter((r) => r.stage === "MANAGER" || r.stage === "WORKFORCE").length);
       setShowGreet(true);
       setStage("ready");
-      console.log("[auth] loadEmployeeData() listo — stage=ready");
     } catch (e) {
-      console.log("[auth] loadEmployeeData() falló:", e.message);
       setBootError(e.message);
       setStage("error");
     }
