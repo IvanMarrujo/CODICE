@@ -689,7 +689,7 @@ function Cockpit({ staff, solicitudes, resolver, go, attendance, openExpediente,
     <div className="fadein">
       <div className="row" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
         <div>
-          <Eyebrow>Cockpit · {ORG.kind}</Eyebrow>
+          <Eyebrow>Panel de control · {ORG.kind}</Eyebrow>
           <h1 style={{ fontSize: 22, fontWeight: 700, margin: "5px 0 0" }}>Panel de control de personal</h1>
         </div>
         <button className="btn" onClick={reset}><RotateCcw size={14} />Reacomodar tablero</button>
@@ -6740,7 +6740,7 @@ function FloatingAIAssistant({ view, staff, solicitudes, attendance, token, go }
 
 const NAV = [
   ["_s", "Operación"],
-  ["cockpit", "Cockpit", LayoutDashboard], ["plantilla", "Plantilla", Users],
+  ["cockpit", "Panel de control", LayoutDashboard], ["plantilla", "Plantilla", Users],
   ["solicitudes", "Solicitudes", Inbox], ["indicadores", "Indicadores WKF", Activity],
   ["asistencia", "Asistencia", UserCheck],
   ["_s", "Cumplimiento"],
