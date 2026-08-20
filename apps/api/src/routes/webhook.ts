@@ -25,7 +25,6 @@ import { autoSyncQueue }         from '../jobs/autoSyncQueue'
 
 const router = Router()
 
-export const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || 'codice_webhook_secret_dev'
 export const TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000 // 5 min
 
 const EXT_BY_SOURCE_TYPE: Record<string, Set<string>> = {
@@ -35,12 +34,14 @@ const EXT_BY_SOURCE_TYPE: Record<string, Set<string>> = {
 }
 
 // ── Auth HMAC ─────────────────────────────────────────────────
-// Firma: sha256(`${tenantId}:${timestamp}`) con WEBHOOK_SECRET.
-// timingSafeEqual en vez de !== — mismo contrato (true/false), solo evita
-// filtrar el secreto por timing en un endpoint nuevo sin comportamiento
-// previo que romper.
+// Firma: sha256(`${tenantId}:${timestamp}`) con el webhookSecret PROPIO
+// del tenant (columna Tenant.webhookSecret, generado random por
+// provisionTenant.ts — nunca un secreto global compartido entre tenants).
+// Esto es lo que hace que el secreto de un tenant no sirva para
+// suplantar a otro: cada tenant se verifica contra su propia fila.
+// timingSafeEqual en vez de !== para no filtrar el secreto por timing.
 
-function verifyHmac(tenantId: string, req: Request): 'ok' | 'expired' | 'invalid' {
+function verifyHmac(secret: string, tenantId: string, req: Request): 'ok' | 'expired' | 'invalid' {
   const signature = req.headers['x-codice-secret'] as string | undefined
   const timestampHeader = req.headers['x-timestamp'] as string | undefined
   if (!signature || !timestampHeader) return 'invalid'
@@ -49,15 +50,15 @@ function verifyHmac(tenantId: string, req: Request): 'ok' | 'expired' | 'invalid
   if (!Number.isFinite(timestamp)) return 'invalid'
   if (Math.abs(Date.now() - timestamp) > TIMESTAMP_TOLERANCE_MS) return 'expired'
 
-  const expected = crypto.createHmac('sha256', WEBHOOK_SECRET).update(`${tenantId}:${timestampHeader}`).digest('hex')
+  const expected = crypto.createHmac('sha256', secret).update(`${tenantId}:${timestampHeader}`).digest('hex')
   const sigBuf = Buffer.from(signature)
   const expBuf = Buffer.from(expected)
   if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) return 'invalid'
   return 'ok'
 }
 
-function requireHmac(tenantId: string, req: Request, res: Response): boolean {
-  const result = verifyHmac(tenantId, req)
+function requireHmac(secret: string, tenantId: string, req: Request, res: Response): boolean {
+  const result = verifyHmac(secret, tenantId, req)
   if (result === 'expired') { res.status(401).json({ error: 'Timestamp expired' }); return false }
   if (result === 'invalid') { res.status(401).json({ error: 'Invalid signature' }); return false }
   return true
@@ -68,19 +69,27 @@ function requireHmac(tenantId: string, req: Request, res: Response): boolean {
 // nunca lo actualiza a 'active' — así que un cache-miss o un valor viejo no
 // implica que el tenant esté inactivo: Postgres manda, y si está ACTIVE
 // refrescamos el cache para que la siguiente llamada sí pegue en Redis.
+//
+// El webhookSecret se resuelve AQUÍ, antes de verificar el HMAC (ver rutas
+// abajo) — así la firma siempre se valida contra el secreto del tenant que
+// dice ser el request, nunca contra un secreto global. Si el tenant no
+// existe, no está ACTIVE, o todavía no tiene secreto (no debería pasar tras
+// el backfill de scripts/rotateWebhookSecrets.ts), se trata igual que firma
+// inválida (401 genérico) para no filtrar por status code si un tenantId
+// existe o no.
 
-async function resolveActiveTenant(tenantId: string): Promise<{ dbSchema: string; plan: string } | null> {
+async function resolveActiveTenant(tenantId: string): Promise<{ dbSchema: string; plan: string; webhookSecret: string } | null> {
   const cacheKey = `t:${tenantId}:status`
   const cachedStatus = await redis.get(cacheKey)
 
   const tenant = await prismaPublic.tenant.findUnique({
     where:  { id: tenantId },
-    select: { dbSchema: true, plan: true, status: true },
+    select: { dbSchema: true, plan: true, status: true, webhookSecret: true },
   })
-  if (!tenant || tenant.status !== 'ACTIVE') return null
+  if (!tenant || tenant.status !== 'ACTIVE' || !tenant.webhookSecret) return null
 
   if (cachedStatus !== 'ACTIVE') await redis.set(cacheKey, 'ACTIVE', 'EX', 300)
-  return { dbSchema: tenant.dbSchema, plan: tenant.plan }
+  return { dbSchema: tenant.dbSchema, plan: tenant.plan, webhookSecret: tenant.webhookSecret }
 }
 
 // ── Upload middleware ─────────────────────────────────────────
@@ -112,10 +121,9 @@ router.post('/sync/:tenantId/:sourceType', handleUpload, async (req: Request, re
     if (!sourceTypeResult.success) throw new AppError(400, 'sourceType debe ser EXCEL, DBF o CFDI')
     const sourceType = sourceTypeResult.data
 
-    if (!requireHmac(tenantId, req, res)) return
-
     const tenant = await resolveActiveTenant(tenantId)
-    if (!tenant) throw new AppError(404, 'Tenant no encontrado o inactivo')
+    if (!tenant) { res.status(401).json({ error: 'Invalid signature' }); return }
+    if (!requireHmac(tenant.webhookSecret, tenantId, req, res)) return
 
     // Noisy neighbor: como máximo ~10 syncs/hora por tenant vía webhook.
     const rateKey = `t:${tenantId}:webhook:rate`
@@ -182,7 +190,9 @@ const heartbeatSchema = z.object({
 router.post('/heartbeat/:tenantId', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { tenantId } = req.params
-    if (!requireHmac(tenantId, req, res)) return
+    const tenant = await resolveActiveTenant(tenantId)
+    if (!tenant) { res.status(401).json({ error: 'Invalid signature' }); return }
+    if (!requireHmac(tenant.webhookSecret, tenantId, req, res)) return
 
     const body = heartbeatSchema.parse(req.body)
     await redis.set(

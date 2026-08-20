@@ -810,13 +810,14 @@ router.get('/download-agent/:tenantId', requireHR, async (req: Request, res: Res
   try {
     if (req.params.tenantId !== req.tenant.id) throw new AppError(403, 'No autorizado para este tenant')
 
-    const tenant = await prismaPublic.tenant.findUnique({ where: { id: req.tenant.id }, select: { slug: true } })
+    const tenant = await prismaPublic.tenant.findUnique({ where: { id: req.tenant.id }, select: { slug: true, webhookSecret: true } })
     if (!tenant) throw new AppError(404, 'Tenant no encontrado')
+    if (!tenant.webhookSecret) throw new AppError(500, 'Este tenant no tiene webhookSecret configurado — corre scripts/rotateWebhookSecrets.ts')
 
     const config = {
       apiUrl:        process.env.AGENT_API_URL || 'http://localhost:3001',
       tenantId:      req.tenant.id,
-      webhookSecret: process.env.WEBHOOK_SECRET || 'codice_webhook_secret_dev',
+      webhookSecret: tenant.webhookSecret,
       agentVersion:  '0.2.0',
       sources: [
         { type: 'EXCEL', watchPath: './watch/nomina.xlsx', enabled: true },

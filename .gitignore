@@ -19,3 +19,4 @@ codice-scaffold.zip
 packages/agent/agent-state.json
 packages/agent/agent-dbf-state.json
 packages/agent/watch/
+packages/agent/config.json

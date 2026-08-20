@@ -26,7 +26,7 @@ import { prismaPublic } from '../lib/prisma'
 import { getTenantPrisma } from '../middleware/tenant'
 import { htmlToPdf } from '../lib/pdf'
 import { savePdf } from '../lib/storage'
-import { WEBHOOK_SECRET } from './webhook'
+import { APP_SECRET } from '../lib/appSecret'
 import { sendWhatsApp } from '../lib/whatsapp'
 
 const router = Router()
@@ -90,7 +90,7 @@ async function tenantCtxFromId(tenantId: string) {
 
 function signatureHash(actaId: string, employeeId: string | null, signedAt: Date): string {
   return crypto.createHash('sha256')
-    .update(`${actaId}:${employeeId ?? 'hr'}:${signedAt.toISOString()}:${WEBHOOK_SECRET}`)
+    .update(`${actaId}:${employeeId ?? 'hr'}:${signedAt.toISOString()}:${APP_SECRET}`)
     .digest('hex')
 }
 
