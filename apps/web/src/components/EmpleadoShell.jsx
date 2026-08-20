@@ -914,6 +914,91 @@ function LoginScreen({ onSuccess }) {
   );
 }
 
+// ── CAMBIO DE PASSWORD OBLIGATORIO ───────────────────────────
+// Pantalla exclusiva (mismo tratamiento que login/booting/error: sustituye
+// todo el shell, sin nav ni topbar) que se interpone entre el login y el
+// resto de la app cuando el backend devuelve mustChangePassword: true. No
+// hay forma de saltarla — EmpleadoShell solo pasa a stage "ready" (y
+// renderiza el nav/las vistas) después de onSuccess() aquí.
+
+function ChangePasswordScreen({ token, onSuccess }) {
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [errorKey, setErrorKey] = useState(0);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (loading) return;
+    if (newPassword.length < 8) {
+      setError("La contraseña debe tener al menos 8 caracteres");
+      setErrorKey((k) => k + 1);
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError("Las contraseñas no coinciden");
+      setErrorKey((k) => k + 1);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      await apiFetch(token, "/api/auth/employee-change-password", {
+        method: "POST",
+        body: JSON.stringify({ newPassword }),
+      });
+      onSuccess();
+    } catch (err) {
+      setError(err.message || "No se pudo actualizar la contraseña.");
+      setErrorKey((k) => k + 1);
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="emp-login">
+      <div>
+        <div className="emp-login-logo">✦ CÓDICE</div>
+        <div className="emp-login-sub">Por seguridad, crea tu contraseña nueva</div>
+      </div>
+      <form className="emp-login-form" onSubmit={submit}>
+        <label className="emp-label">Nueva contraseña</label>
+        <input
+          className="emp-input" style={{ marginBottom: 14 }} type="password" autoComplete="new-password"
+          value={newPassword} onChange={(e) => setNewPassword(e.target.value)}
+        />
+        <label className="emp-label">Confirmar contraseña</label>
+        <input
+          className="emp-input" style={{ marginBottom: 24 }} type="password" autoComplete="new-password"
+          value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)}
+        />
+        <button
+          type="submit" className="emp-btn-primary" style={{ opacity: loading ? 0.7 : undefined }}
+          disabled={loading || !newPassword || !confirmPassword}
+        >
+          {loading ? <Loader2 size={20} style={{ animation: "empspin 1s linear infinite" }} /> : <Lock size={20} />} Guardar contraseña
+        </button>
+        <AnimatePresence mode="wait">
+          {error && (
+            <motion.div
+              key={errorKey}
+              className="emp-login-error"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+            >
+              {error}
+            </motion.div>
+          )}
+        </AnimatePresence>
+        <div className="emp-login-help">Mínimo 8 caracteres. No puede ser igual a tu CURP o NSS.</div>
+      </form>
+    </div>
+  );
+}
+
 // ── GREET SCREEN ─────────────────────────────────────────────
 
 function GreetScreen({ employee, onDismiss }) {
@@ -2699,7 +2784,7 @@ export default function EmpleadoShell() {
   const canvasRef = useRef(null);
   const fieldRef = useParticleField(canvasRef);
 
-  const [stage, setStage] = useState("login"); // login | booting | error | ready
+  const [stage, setStage] = useState("login"); // login | booting | forcepw | error | ready
   const [bootError, setBootError] = useState(null);
   const [token, setToken] = useState(null);
   const [employee, setEmployee] = useState(null);
@@ -2763,7 +2848,7 @@ export default function EmpleadoShell() {
   // del backend), así que solo falta lo que depende del resto del stack:
   // notificaciones y solicitudes pendientes.
   const loadEmployeeData = useCallback(async (session) => {
-    const { accessToken, employee: full } = session;
+    const { accessToken, employee: full, mustChangePassword } = session;
     setStage("booting");
     setBootError(null);
     try {
@@ -2774,12 +2859,26 @@ export default function EmpleadoShell() {
       setEmployee(full);
       setUnreadCount(notif.unreadCount);
       setPendingReq((reqs.data || []).filter((r) => r.stage === "MANAGER" || r.stage === "WORKFORCE").length);
-      setShowGreet(true);
-      setStage("ready");
+
+      // Cambio de password obligatorio (primer login tras el batch de
+      // provisioning) — bloquea el resto del shell hasta completarse, ver
+      // ChangePasswordScreen. El token ya es válido para todo lo demás,
+      // así que no hace falta re-loguear después de cambiarlo.
+      if (mustChangePassword) {
+        setStage("forcepw");
+      } else {
+        setShowGreet(true);
+        setStage("ready");
+      }
     } catch (e) {
       setBootError(e.message);
       setStage("error");
     }
+  }, []);
+
+  const onPasswordChanged = useCallback(() => {
+    setShowGreet(true);
+    setStage("ready");
   }, []);
 
   const backToLogin = () => {
@@ -2806,6 +2905,7 @@ export default function EmpleadoShell() {
 
       {stage === "login" && <LoginScreen onSuccess={loadEmployeeData} />}
       {stage === "booting" && <LoadingScreen text="Cargando tu información…" />}
+      {stage === "forcepw" && <ChangePasswordScreen token={token} onSuccess={onPasswordChanged} />}
       {stage === "error" && <ErrorScreen message={bootError} onRetry={backToLogin} />}
 
       <AnimatePresence>
