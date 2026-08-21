@@ -263,3 +263,21 @@ enum SyncStatus {
 
   @@schema("public")
 }
+
+// ── ZKTECO DEVICES (tabla GLOBAL sn → tenant) ────────────────
+// Resuelve el tenant de un dispositivo ZKTeco en el webhook ADMS
+// (ver apps/api/src/routes/zktecoWebhook.ts). La crea por SQL raw
+// scripts/migrateZktecoDevices.ts — se modela aquí SOLO para que
+// `prisma db push` no la considere sobrante y la borre. Los campos
+// (snake_case, timestamptz) deben calcar el DDL de ese script; no
+// confundir con la tabla `zkteco_devices` por-tenant (otra forma).
+model ZktecoDevice {
+  sn           String    @id                    // serial del dispositivo
+  tenantId     String    @map("tenant_id")
+  alias        String?
+  registeredAt DateTime? @default(now()) @map("registered_at") @db.Timestamptz(6)
+
+  @@index([tenantId], map: "idx_zkteco_devices_public_tenant")
+  @@map("zkteco_devices")
+  @@schema("public")
+}
