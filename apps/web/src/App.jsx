@@ -6908,7 +6908,13 @@ function useAttendance(token, socket) {
     const onEvt = () => reload();
     socket.on("attendance:checkin", onEvt);
     socket.on("attendance:checkout", onEvt);
-    return () => { socket.off("attendance:checkin", onEvt); socket.off("attendance:checkout", onEvt); };
+    // El backend emite `headcount:refresh` (payload vacío) cuando la plantilla
+    // cambia por CUALQUIERA de las 5 fuentes reales: sync-agent (agentWs),
+    // sync de conectores (syncEmitter / connectors), alta/baja de empleados
+    // (employees) y punches ZKTeco (zktecoWebhook). Sin este listener el
+    // widget de headcount solo se refrescaba con check-in/out (2 de 5 fuentes).
+    socket.on("headcount:refresh", onEvt);
+    return () => { socket.off("attendance:checkin", onEvt); socket.off("attendance:checkout", onEvt); socket.off("headcount:refresh", onEvt); };
   }, [socket, reload]);
   return { ...state, reload };
 }
